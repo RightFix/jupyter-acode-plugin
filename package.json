@@ -1,0 +1,22 @@
+{
+  "name": "jupyter-acode",
+  "version": "1.0.0",
+  "description": "Read, edit and interact with Jupyter notebooks (.ipynb) in Acode",
+  "main": "src/main.js",
+  "repository": "https://github.com/RightFix/jupyter-acode.git",
+  "author": "RightFix",
+  "license": "MIT",
+  "dependencies": {
+    "acode-plugin-types": "^1.11.7-patch.2",
+    "html-tag-js": "^2.4.15",
+    "marked": "^12.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.8",
+    "jszip": "^3.10.1"
+  },
+  "scripts": {
+    "dev": "node esbuild.config.mjs --serve",
+    "build": "node esbuild.config.mjs"
+  }
+}

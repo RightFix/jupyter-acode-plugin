@@ -1,0 +1,19 @@
+{
+  "$schema": "https://acode.app/schema/plugin/v0.1.0.json",
+  "id": "com.rightfix.jupyter",
+  "name": "Jupyter Notebook",
+  "main": "main.js",
+  "version": "1.0.0",
+  "repository": "https://github.com/RightFix/jupyter-acode.git",
+  "icon": "icon.svg",
+  "minVersionCode": 290,
+  "license": "MIT",
+  "keywords": ["jupyter", "notebook", "ipynb", "python", "data science"],
+  "price": 0,
+  "permissions": ["file:read", "file:write"],
+  "author": {
+    "name": "RightFix",
+    "email": "righteousnessude@gmail.com",
+    "github": "https://github.com/RightFix"
+  }
+}
