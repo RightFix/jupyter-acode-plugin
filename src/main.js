@@ -441,10 +441,29 @@ class JupyterNotebook {
     }
 
     try {
-      const tempFile = `/tmp/jupyter_cell_${Date.now()}.py`;
-      await acode.fsOperation('/tmp').createFile(`jupyter_cell_${Date.now()}.py`, pythonCode);
+      const fileName = `jupyter_cell_${Date.now()}.py`;
+      const tempFile = `${DATA_STORAGE}/${fileName}`;
       
-      const result = await Executor.execute(`python3 ${tempFile} 2>&1`);
+      const dirExists = await acode.fsOperation(DATA_STORAGE).exists();
+      if (!dirExists) {
+        return {
+          outputs: [{
+            output_type: 'error',
+            ename: 'Error',
+            evalue: 'DATA_STORAGE directory not found',
+            traceback: ['DATA_STORAGE directory not found']
+          }],
+          execution_count: null
+        };
+      }
+      
+      await acode.fsOperation(DATA_STORAGE).createFile(fileName, pythonCode);
+      
+      const result = await Executor.execute(`python3 "${tempFile}" 2>&1`);
+      
+      try {
+        await acode.fsOperation(tempFile).delete();
+      } catch (e) {}
       
       return {
         outputs: [{
