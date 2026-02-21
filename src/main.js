@@ -532,6 +532,8 @@ class JupyterNotebook {
   }
 
   async closeViewer() {
+    const actionStack = acode.require('actionStack');
+    
     if (this.isModified) {
       const save = await acode.confirm('Save changes?', 'Do you want to save your changes before closing?');
       if (save) {
@@ -539,8 +541,17 @@ class JupyterNotebook {
       }
     }
     
+    try {
+      actionStack.remove('jupyter-notebook-viewer');
+    } catch (e) {}
+    
     if (this.notebookPage) {
-      this.notebookPage.hide();
+      try {
+        this.notebookPage.remove();
+      } catch (e) {
+        this.notebookPage.hide();
+      }
+      this.notebookPage = null;
     }
     
     this.notebookData = null;
@@ -582,7 +593,12 @@ class JupyterNotebook {
     acode.unregisterFileHandler(plugin.id);
     
     if (this.notebookPage) {
-      this.notebookPage.hide();
+      try {
+        this.notebookPage.remove();
+      } catch (e) {
+        this.notebookPage.hide();
+      }
+      this.notebookPage = null;
     }
   }
 }
