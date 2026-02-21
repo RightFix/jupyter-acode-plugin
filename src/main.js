@@ -58,6 +58,18 @@ class JupyterNotebook {
 
   setupEditorHook() {
     editorManager.on('switch-file', this.onSwitchFile.bind(this));
+    
+    // Listen for file close events
+    document.addEventListener('close-file', (e) => {
+      const fileId = e.detail?.id || e.detail?.file?.id;
+      if (fileId && this.notebooks.has(fileId)) {
+        const state = this.notebooks.get(fileId);
+        if (state.container && state.container.parentElement) {
+          state.container.remove();
+        }
+        this.notebooks.delete(fileId);
+      }
+    });
   }
 
   onSwitchFile(file) {
@@ -629,6 +641,19 @@ class JupyterNotebook {
       return { outputs: [], execution_count: null };
     }
 
+    // Check if Executor is available
+    if (typeof Executor === 'undefined' || !Executor.execute) {
+      return {
+        outputs: [{
+          output_type: 'error',
+          ename: 'Error',
+          evalue: 'Terminal not available',
+          traceback: ['Executor not found', 'Make sure Acode terminal is set up']
+        }],
+        execution_count: null
+      };
+    }
+
     try {
       let result;
       try {
@@ -713,7 +738,9 @@ class JupyterNotebook {
     try {
       await acode.fsOperation(this.currentFile).writeFile(JSON.stringify(this.notebookData, null, 2));
       this.setModified(false);
-      acode.pushNotification('Saved', 'Notebook saved!', { type: 'success' });
+      if (acode.toast) {
+        acode.toast('Notebook saved!', 2000);
+      }
     } catch (error) {
       acode.alert('Error', `Failed to save: ${error.message}`);
     }
