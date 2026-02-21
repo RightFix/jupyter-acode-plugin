@@ -119,17 +119,16 @@ class JupyterNotebook {
         return;
       }
 
-      // Create new file using editorManager
+      // Create new file using EditorFile
+      const EditorFile = acode.require('editorFile');
       const fileId = `jupyter-${Date.now()}`;
-      editorManager.addNewFile(filename, {
+      
+      const file = new EditorFile(filename, {
         uri: uri,
         text: '', // We'll render our own view
-        render: true,
         isUnsaved: false,
         id: fileId
       });
-
-      const file = editorManager.getFile(fileId, 'id');
       
       this.currentFile = uri;
       this.currentFileName = filename;
