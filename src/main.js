@@ -10,26 +10,23 @@ const CELL_TYPES = {
 
 class JupyterNotebook {
   baseUrl = '';
-  $page = null;
   notebookData = null;
   currentFile = null;
+  currentFileName = null;
   $container = null;
-  $header = null;
   $cells = null;
   selectedCellIndex = -1;
   isModified = false;
   notebookPage = null;
 
-  async init(baseUrl, $page, { cacheFileUrl, cacheFile }) {
+  async init(baseUrl) {
     this.baseUrl = baseUrl;
-    this.$page = $page;
-    
     this.registerCommands();
     this.registerFileHandler();
   }
 
   registerCommands() {
-    const commands = acode.require('commands');
+    const { commands } = editorManager.editor;
 
     commands.addCommand({
       name: 'open-notebook-viewer',
@@ -49,15 +46,9 @@ class JupyterNotebook {
 
   async openNotebookPicker() {
     try {
-      const fs = acode.require('fs');
-      const fileBrowser = acode.require('fileBrowser');
-      
-      const file = await fileBrowser('open', {
-        type: 'file'
-      });
-      
-      if (file && file.url) {
-        await this.openNotebookFile(file.url, file.name);
+      const result = await acode.fileBrowser('file', 'Select notebook');
+      if (result && result.url) {
+        await this.openNotebookFile(result.url, result.filename || 'notebook.ipynb');
       }
     } catch (error) {
       acode.alert('Error', `Failed to open file browser: ${error.message}`);
@@ -69,9 +60,7 @@ class JupyterNotebook {
       const loader = acode.loader('Loading notebook...', 'Please wait');
       loader.show();
 
-      const fs = acode.require('fs');
-      const fileFs = await fs(uri);
-      const content = await fileFs.readFile('utf-8');
+      const content = await acode.fsOperation(uri).readFile('utf-8');
       
       this.notebookData = JSON.parse(content);
       this.currentFile = uri;
@@ -81,14 +70,13 @@ class JupyterNotebook {
       
       this.renderNotebookViewer();
     } catch (error) {
+      loader.hide();
       acode.alert('Error', `Failed to open notebook: ${error.message}`);
     }
   }
 
   renderNotebookViewer() {
-    const page = acode.require('page');
     const actionStack = acode.require('actionStack');
-    const tag = acode.require('tag');
 
     const backBtn = tag('span', {
       className: 'icon arrowleft',
@@ -144,10 +132,6 @@ class JupyterNotebook {
     };
 
     this.notebookPage.show();
-  }
-
-  getFileName() {
-    return this.currentFileName || 'Untitled.ipynb';
   }
 
   renderCells() {
@@ -442,15 +426,9 @@ class JupyterNotebook {
 
     try {
       const tempFile = `/tmp/jupyter_cell_${Date.now()}.py`;
-      const fs = acode.require('fs');
-      const tempFs = await fs(tempFile);
-      await tempFs.writeFile(pythonCode);
+      await acode.fsOperation('/tmp').createFile(`jupyter_cell_${Date.now()}.py`, pythonCode);
       
       const result = await Executor.execute(`python3 ${tempFile} 2>&1`);
-      
-      try {
-        await tempFs.delete();
-      } catch (e) {}
       
       return {
         outputs: [{
@@ -497,7 +475,7 @@ class JupyterNotebook {
     if (this.notebookPage && this.notebookPage.header) {
       const title = this.notebookPage.header.querySelector('.title');
       if (title) {
-        title.textContent = value ? `● ${this.getFileName()}` : this.getFileName();
+        title.textContent = value ? `● ${this.currentFileName}` : this.currentFileName;
       }
     }
   }
@@ -509,9 +487,7 @@ class JupyterNotebook {
     }
     
     try {
-      const fs = acode.require('fs');
-      const fileFs = await fs(this.currentFile);
-      await fileFs.writeFile(JSON.stringify(this.notebookData, null, 2));
+      await acode.fsOperation(this.currentFile).writeFile(JSON.stringify(this.notebookData, null, 2));
       
       this.setModified(false);
       acode.pushNotification('Saved', 'Notebook saved successfully!', { type: 'success' });
@@ -565,7 +541,7 @@ class JupyterNotebook {
   }
 
   destroy() {
-    const commands = acode.require('commands');
+    const { commands } = editorManager.editor;
     commands.removeCommand('open-notebook-viewer');
     
     acode.unregisterFileHandler(plugin.id);
@@ -579,11 +555,11 @@ class JupyterNotebook {
 if (window.acode) {
   const jupyterPlugin = new JupyterNotebook();
   
-  acode.setPluginInit(plugin.id, async (baseUrl, $page, { cacheFileUrl, cacheFile }) => {
+  acode.setPluginInit(plugin.id, (baseUrl, $page, { cacheFileUrl, cacheFile }) => {
     if (!baseUrl.endsWith('/')) {
       baseUrl += '/';
     }
-    await jupyterPlugin.init(baseUrl, $page, { cacheFileUrl, cacheFile });
+    jupyterPlugin.init(baseUrl);
   });
   
   acode.setPluginUnmount(plugin.id, () => {
