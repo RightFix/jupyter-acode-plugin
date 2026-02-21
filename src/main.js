@@ -29,11 +29,9 @@ class JupyterNotebook {
   isModified = false;
   editorFile = null;
   notebooks = new Map();
-  EditorFile = null;
 
   init(baseUrl) {
     this.baseUrl = baseUrl;
-    this.EditorFile = acode.require('editorFile');
     this.registerCommands();
     this.registerFileHandler();
     this.setupEditorHook();
@@ -67,7 +65,7 @@ class JupyterNotebook {
     const notebookData = this.notebooks.get(file.id);
     if (notebookData) {
       this.currentFile = notebookData.uri;
-      this.currentFileName = file.filename;
+      this.currentFileName = file.filename || file.name;
       this.notebookData = notebookData.data;
       this.$container = notebookData.container;
       this.$cells = notebookData.cellsContainer;
@@ -77,9 +75,7 @@ class JupyterNotebook {
       this.showNotebookInEditor();
     } else {
       // Switching to a regular file, hide notebook if visible
-      if (this.$container && this.$container.parentElement) {
-        this.$container.style.display = 'none';
-      }
+      this.hideNotebookFromEditor();
     }
   }
 
@@ -111,15 +107,18 @@ class JupyterNotebook {
         return;
       }
 
-      // Create new editor file tab
-      const file = new this.EditorFile(filename, {
+      // Create new file using editorManager
+      const fileId = `jupyter-${Date.now()}`;
+      editorManager.addNewFile(filename, {
         uri: uri,
-        text: JSON.stringify(notebookData, null, 2),
+        text: '', // We'll render our own view
         render: true,
         isUnsaved: false,
-        id: `jupyter-${Date.now()}`
+        id: fileId
       });
 
+      const file = editorManager.getFile(fileId, 'id');
+      
       this.currentFile = uri;
       this.currentFileName = filename;
       this.notebookData = notebookData;
@@ -131,13 +130,14 @@ class JupyterNotebook {
       this.createNotebookContainer();
       
       // Store notebook data
-      this.notebooks.set(file.id, {
+      this.notebooks.set(fileId, {
         uri: uri,
         data: notebookData,
         container: this.$container,
         cellsContainer: this.$cells,
         selectedIndex: this.selectedCellIndex,
-        modified: false
+        modified: false,
+        fileId: fileId
       });
 
       // Show notebook in editor
@@ -180,25 +180,36 @@ class JupyterNotebook {
   }
 
   showNotebookInEditor() {
-    const $editors = document.getElementById('editors');
-    const $header = document.querySelector('header.header') || document.querySelector('.header');
+    // Get the main content wrapper
+    const $main = document.querySelector('main') || document.querySelector('#main');
+    const $header = document.querySelector('header') || document.querySelector('.header');
+    const $sidebar = document.querySelector('#sidebar');
+    
+    // Calculate header height
+    let headerHeight = 44;
+    if ($header) {
+      headerHeight = $header.offsetHeight || 44;
+    }
     
     // Position notebook below header
-    if ($header) {
-      const headerHeight = $header.offsetHeight || 44;
-      this.$container.style.top = headerHeight + 'px';
-    }
+    this.$container.style.top = headerHeight + 'px';
+    
+    // Hide the editor container
+    const $editor = document.getElementById('editor');
+    const $editors = document.getElementById('editors');
+    
+    if ($editor) $editor.style.display = 'none';
+    if ($editors) $editors.style.display = 'none';
 
-    // Hide the editor content but keep structure
-    if ($editors) {
-      $editors.style.display = 'none';
-    }
-
-    // Show notebook
+    // Append notebook to main content area
     if (!this.$container.parentElement) {
-      const main = document.querySelector('main') || document.querySelector('.main') || document.body;
-      main.appendChild(this.$container);
+      if ($main) {
+        $main.appendChild(this.$container);
+      } else {
+        document.body.appendChild(this.$container);
+      }
     }
+    
     this.$container.style.display = 'block';
   }
 
@@ -207,10 +218,12 @@ class JupyterNotebook {
       this.$container.style.display = 'none';
     }
     
+    // Show the editor
+    const $editor = document.getElementById('editor');
     const $editors = document.getElementById('editors');
-    if ($editors) {
-      $editors.style.display = '';
-    }
+    
+    if ($editor) $editor.style.display = '';
+    if ($editors) $editors.style.display = '';
   }
 
   renderCells() {
