@@ -9,7 +9,6 @@ const CELL_TYPES = {
   RAW: 'raw'
 };
 
-// Auto-close pairs for intellisense
 const PAIRS = {
   '(': ')',
   '[': ']',
@@ -28,14 +27,14 @@ class JupyterNotebook {
   $cells = null;
   selectedCellIndex = -1;
   isModified = false;
-  notebookPage = null;
-  pageFn = null;
+  editorFile = null;
+  notebooks = new Map();
 
   init(baseUrl) {
     this.baseUrl = baseUrl;
-    this.pageFn = acode.require('page');
     this.registerCommands();
     this.registerFileHandler();
+    this.setupEditorHook();
   }
 
   registerCommands() {
@@ -52,10 +51,34 @@ class JupyterNotebook {
     acode.registerFileHandler(plugin.id, {
       extensions: ['ipynb'],
       handleFile: async (fileInfo) => {
-        console.log('Jupyter: File handler called', fileInfo);
         await this.openNotebookFile(fileInfo.uri, fileInfo.name);
       }
     });
+  }
+
+  setupEditorHook() {
+    editorManager.on('switch-file', this.onSwitchFile.bind(this));
+  }
+
+  onSwitchFile(file) {
+    // Check if switching to a notebook tab
+    const notebookData = this.notebooks.get(file.id);
+    if (notebookData) {
+      this.currentFile = notebookData.uri;
+      this.currentFileName = file.filename;
+      this.notebookData = notebookData.data;
+      this.$container = notebookData.container;
+      this.$cells = notebookData.cellsContainer;
+      this.selectedCellIndex = notebookData.selectedIndex;
+      this.isModified = notebookData.modified;
+      this.editorFile = file;
+      this.showNotebookInEditor();
+    } else {
+      // Switching to a regular file, hide notebook if visible
+      if (this.$container && this.$container.parentElement) {
+        this.$container.style.display = 'none';
+      }
+    }
   }
 
   async openNotebookPicker() {
@@ -70,60 +93,65 @@ class JupyterNotebook {
   }
 
   async openNotebookFile(uri, filename) {
-    console.log('Jupyter: Opening file', uri, filename);
-    
     try {
       const loader = acode.loader('Loading notebook...', 'Please wait');
       loader.show();
 
       const content = await acode.fsOperation(uri).readFile('utf-8');
-      
-      this.notebookData = JSON.parse(content);
-      this.currentFile = uri;
-      this.currentFileName = filename || 'notebook.ipynb';
+      const notebookData = JSON.parse(content);
       
       loader.hide();
+
+      // Check if already open
+      const existingFile = editorManager.getFile(uri, 'uri');
+      if (existingFile) {
+        editorManager.switchFile(existingFile.id);
+        return;
+      }
+
+      // Create new editor file tab
+      const file = new EditorFile(filename, {
+        uri: uri,
+        text: JSON.stringify(notebookData, null, 2),
+        render: true,
+        isUnsaved: false,
+        id: `jupyter-${Date.now()}`
+      });
+
+      this.currentFile = uri;
+      this.currentFileName = filename;
+      this.notebookData = notebookData;
+      this.editorFile = file;
+      this.selectedCellIndex = -1;
+      this.isModified = false;
+
+      // Create notebook container
+      this.createNotebookContainer();
       
-      this.renderNotebookViewer();
+      // Store notebook data
+      this.notebooks.set(file.id, {
+        uri: uri,
+        data: notebookData,
+        container: this.$container,
+        cellsContainer: this.$cells,
+        selectedIndex: this.selectedCellIndex,
+        modified: false
+      });
+
+      // Show notebook in editor
+      this.showNotebookInEditor();
+
     } catch (error) {
-      console.error('Jupyter: Error', error);
       acode.alert('Error', `Failed to open notebook: ${error.message}`);
     }
   }
 
-  renderNotebookViewer() {
-    const actionStack = acode.require('actionStack');
-
-    const backBtn = tag('span', {
-      className: 'icon arrowleft',
-      onclick: (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        this.closeViewer();
-        return false;
-      }
-    });
-
-    const saveBtn = tag('span', {
-      className: 'icon save',
-      onclick: () => this.saveNotebook()
-    });
-
-    const menuBtn = tag('span', {
-      className: 'icon more_vert',
-      onclick: () => this.showMenu()
-    });
-
-    this.notebookPage = this.pageFn(this.currentFileName, {
-      lead: backBtn,
-      tail: [saveBtn, menuBtn]
-    });
-
+  createNotebookContainer() {
     this.$container = tag('div', {
       className: 'notebook-container',
       style: { background: '#ffffff' }
     });
-    
+
     const styleEl = tag('style', { textContent: notebookStyles });
     this.$container.appendChild(styleEl);
 
@@ -132,35 +160,65 @@ class JupyterNotebook {
       innerHTML: `
         <button class="toolbar-btn add-code-btn">+ Code</button>
         <button class="toolbar-btn add-md-btn">+ Markdown</button>
+        <button class="toolbar-btn run-all-btn">Run All</button>
+        <button class="toolbar-btn save-btn">Save</button>
       `
     });
+    
     toolbar.querySelector('.add-code-btn').onclick = () => this.addCell(CELL_TYPES.CODE);
     toolbar.querySelector('.add-md-btn').onclick = () => this.addCell(CELL_TYPES.MARKDOWN);
+    toolbar.querySelector('.run-all-btn').onclick = () => this.runAllCells();
+    toolbar.querySelector('.save-btn').onclick = () => this.saveNotebook();
+    
     this.$container.appendChild(toolbar);
-    
+
     this.$cells = tag('div', { className: 'cells-container' });
-    
     this.renderCells();
-    
     this.$container.appendChild(this.$cells);
-    this.notebookPage.appendBody(this.$container);
+  }
 
-    this.notebookPage.show = () => {
-      actionStack.push({
-        id: 'jupyter-notebook-viewer',
-        action: () => this.closeViewer()
-      });
-      app.append(this.notebookPage);
-    };
+  showNotebookInEditor() {
+    // Hide the editor
+    const editorContainer = document.getElementById('editor');
+    if (editorContainer) {
+      editorContainer.style.display = 'none';
+    }
 
-    this.notebookPage.show();
+    // Show notebook container in the main content area
+    const mainContent = document.querySelector('.main') || document.querySelector('#root') || document.body;
+    
+    // Find the right container
+    let container = this.$container;
+    
+    if (!container.parentElement) {
+      // Insert after the editor
+      if (editorContainer && editorContainer.parentElement) {
+        editorContainer.parentElement.insertBefore(container, editorContainer.nextSibling);
+      } else {
+        mainContent.appendChild(container);
+      }
+    } else {
+      container.style.display = 'block';
+    }
+  }
+
+  hideNotebookFromEditor() {
+    if (this.$container) {
+      this.$container.style.display = 'none';
+    }
+    
+    // Show the editor
+    const editorContainer = document.getElementById('editor');
+    if (editorContainer) {
+      editorContainer.style.display = 'block';
+    }
   }
 
   renderCells() {
     this.$cells.innerHTML = '';
-    
+
     if (!this.notebookData || !this.notebookData.cells) {
-      this.$cells.innerHTML = '<div class="empty-notebook">No cells in this notebook. Add a cell to get started.</div>';
+      this.$cells.innerHTML = '<div class="empty-notebook">No cells. Add a cell to start.</div>';
       return;
     }
 
@@ -168,6 +226,8 @@ class JupyterNotebook {
       const $cell = this.createCellElement(cell, index);
       this.$cells.appendChild($cell);
     });
+    
+    this.saveNotebookState();
   }
 
   setupIntellisense($editor) {
@@ -175,8 +235,7 @@ class JupyterNotebook {
       const start = $editor.selectionStart;
       const end = $editor.selectionEnd;
       const value = $editor.value;
-      
-      // Auto-close pairs
+
       if (PAIRS[e.key]) {
         e.preventDefault();
         const closing = PAIRS[e.key];
@@ -187,29 +246,24 @@ class JupyterNotebook {
         $editor.dispatchEvent(new Event('input'));
         return;
       }
-      
-      // Auto-indent on Enter
+
       if (e.key === 'Enter') {
         e.preventDefault();
         const lineStart = value.lastIndexOf('\n', start - 1) + 1;
         const currentLine = value.substring(lineStart, start);
         const indent = currentLine.match(/^\s*/)[0];
-        
-        // Check if we need extra indent (after : in Python)
         let extraIndent = '';
         const trimmedLine = currentLine.trim();
-        if (trimmedLine.endsWith(':') && (trimmedLine.startsWith('def ') || trimmedLine.startsWith('class ') || trimmedLine.startsWith('if ') || trimmedLine.startsWith('elif ') || trimmedLine.startsWith('else') || trimmedLine.startsWith('for ') || trimmedLine.startsWith('while ') || trimmedLine.startsWith('try') || trimmedLine.startsWith('except') || trimmedLine.startsWith('with '))) {
+        if (trimmedLine.endsWith(':') && /^(def |class |if |elif |else|for |while |try|except|with )/.test(trimmedLine)) {
           extraIndent = '    ';
         }
-        
         const newValue = value.substring(0, start) + '\n' + indent + extraIndent + value.substring(end);
         $editor.value = newValue;
         $editor.selectionStart = $editor.selectionEnd = start + 1 + indent.length + extraIndent.length;
         $editor.dispatchEvent(new Event('input'));
         return;
       }
-      
-      // Auto-backspace closing pair
+
       if (e.key === 'Backspace') {
         const before = value.substring(start - 1, start);
         const after = value.substring(start, start + 1);
@@ -220,8 +274,7 @@ class JupyterNotebook {
           $editor.dispatchEvent(new Event('input'));
         }
       }
-      
-      // Tab to spaces
+
       if (e.key === 'Tab') {
         e.preventDefault();
         const newValue = value.substring(0, start) + '    ' + value.substring(end);
@@ -237,7 +290,7 @@ class JupyterNotebook {
       className: `cell cell-${cell.cell_type}${index === this.selectedCellIndex ? ' selected' : ''}`,
       dataset: { index }
     });
-    
+
     const $cellActions = tag('div', {
       className: 'cell-actions',
       innerHTML: `
@@ -249,7 +302,7 @@ class JupyterNotebook {
     });
 
     const $cellContent = tag('div', { className: 'cell-content' });
-    
+
     if (cell.cell_type === CELL_TYPES.MARKDOWN) {
       const $preview = tag('div', { className: 'markdown-preview' });
       try {
@@ -257,17 +310,17 @@ class JupyterNotebook {
       } catch (e) {
         $preview.textContent = this.getSourceText(cell.source);
       }
-      
+
       const $editor = tag('textarea', {
         className: 'cell-editor',
         value: this.getSourceText(cell.source),
         style: { display: 'none' },
         spellcheck: false
       });
-      
+
       $cellContent.appendChild($preview);
       $cellContent.appendChild($editor);
-      
+
       $preview.onclick = () => this.editMarkdownCell($cell, $preview, $editor);
       $editor.onblur = () => this.finishEditMarkdownCell(cell, $preview, $editor);
       $editor.oninput = () => {
@@ -277,48 +330,46 @@ class JupyterNotebook {
       this.setupIntellisense($editor);
     } else {
       const $promptArea = tag('div', { className: 'prompt-area' });
-      
+
       const execNum = cell.execution_count || ' ';
       const $prompt = tag('div', {
         className: 'input-prompt',
-        innerHTML: `<span class="in-prompt">In&nbsp;[${execNum}]:</span>`
+        innerHTML: `<span class="in-prompt">In [${execNum}]:</span>`
       });
-      
+
       const $editor = tag('textarea', {
         className: 'cell-editor code-editor',
         value: this.getSourceText(cell.source),
-        spellcheck: false,
-        placeholder: ''
+        spellcheck: false
       });
-      
+
       $promptArea.appendChild($prompt);
       $promptArea.appendChild($editor);
       $cellContent.appendChild($promptArea);
-      
+
       $editor.onfocus = () => this.selectCell(index);
       $editor.oninput = () => {
         this.updateCellSource(cell, $editor.value);
         this.autoResize($editor);
       };
-      
-      // Shift+Enter to run
+
       $editor.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && e.shiftKey) {
           e.preventDefault();
           this.runCell(index);
         }
       });
-      
+
       this.setupIntellisense($editor);
       setTimeout(() => this.autoResize($editor), 0);
     }
 
     if (cell.cell_type === CELL_TYPES.CODE && cell.outputs && cell.outputs.length > 0) {
       const $outputs = tag('div', { className: 'cell-outputs' });
-      
+
       cell.outputs.forEach(output => {
         const $outputContainer = tag('div', { className: 'prompt-area' });
-        
+
         if (output.output_type === 'execute_result') {
           const $outPrompt = tag('div', {
             className: 'output-prompt',
@@ -326,7 +377,7 @@ class JupyterNotebook {
           });
           $outputContainer.appendChild($outPrompt);
         }
-        
+
         const $output = tag('div', {
           className: `output output-${output.output_type}`,
           innerHTML: this.renderOutput(output)
@@ -334,7 +385,7 @@ class JupyterNotebook {
         $outputContainer.appendChild($output);
         $outputs.appendChild($outputContainer);
       });
-      
+
       $cellContent.appendChild($outputs);
     }
 
@@ -375,7 +426,7 @@ class JupyterNotebook {
   }
 
   updateCellSource(cell, text) {
-    cell.source = text.split('\n').map((line, i, arr) => 
+    cell.source = text.split('\n').map((line, i, arr) =>
       i < arr.length - 1 ? line + '\n' : line
     );
     this.setModified(true);
@@ -434,6 +485,7 @@ class JupyterNotebook {
     cells.forEach((cell, i) => {
       cell.classList.toggle('selected', i === index);
     });
+    this.saveNotebookState();
   }
 
   addCell(type) {
@@ -451,7 +503,7 @@ class JupyterNotebook {
 
     const insertIndex = this.selectedCellIndex >= 0 ? this.selectedCellIndex + 1 : this.notebookData.cells.length;
     this.notebookData.cells.splice(insertIndex, 0, newCell);
-    
+
     this.renderCells();
     this.selectCell(insertIndex);
     this.setModified(true);
@@ -480,29 +532,18 @@ class JupyterNotebook {
 
     const cells = this.notebookData.cells;
     [cells[index], cells[newIndex]] = [cells[newIndex], cells[index]];
-    
+
     this.renderCells();
     this.selectCell(newIndex);
     this.setModified(true);
   }
 
-  toggleCellType(index = this.selectedCellIndex) {
-    if (index < 0) return;
-
-    const cell = this.notebookData.cells[index];
-    if (cell.cell_type === CELL_TYPES.CODE) {
-      cell.cell_type = CELL_TYPES.MARKDOWN;
-      delete cell.outputs;
-      delete cell.execution_count;
-    } else if (cell.cell_type === CELL_TYPES.MARKDOWN) {
-      cell.cell_type = CELL_TYPES.CODE;
-      cell.outputs = [];
-      cell.execution_count = null;
+  async runAllCells() {
+    const cells = this.notebookData.cells.filter(c => c.cell_type === CELL_TYPES.CODE);
+    for (let i = 0; i < cells.length; i++) {
+      const index = this.notebookData.cells.indexOf(cells[i]);
+      await this.runCell(index);
     }
-    
-    this.renderCells();
-    this.selectCell(index);
-    this.setModified(true);
   }
 
   async runCell(index = this.selectedCellIndex) {
@@ -515,10 +556,9 @@ class JupyterNotebook {
     const $editor = $cell.querySelector('.cell-editor');
     const code = $editor.value;
 
-    // Update prompt to show running
     const $prompt = $cell.querySelector('.input-prompt');
     if ($prompt) {
-      $prompt.innerHTML = '<span class="in-prompt">In&nbsp;[*]:</span>';
+      $prompt.innerHTML = '<span class="in-prompt">In [*]:</span>';
     }
 
     const $outputs = $cell.querySelector('.cell-outputs');
@@ -533,20 +573,19 @@ class JupyterNotebook {
       const result = await this.executeCode(code);
       cell.outputs = result.outputs || [];
       cell.execution_count = result.execution_count || Date.now();
-      
-      // Update prompt with execution count
+
       if ($prompt) {
-        $prompt.innerHTML = `<span class="in-prompt">In&nbsp;[${cell.execution_count}]:</span>`;
+        $prompt.innerHTML = `<span class="in-prompt">In [${cell.execution_count}]:</span>`;
       }
-      
+
       $newOutputs.innerHTML = '';
-      
+
       if (cell.outputs.length === 0) {
         $newOutputs.remove();
       } else {
         cell.outputs.forEach(output => {
           const $outputContainer = tag('div', { className: 'prompt-area' });
-          
+
           if (output.output_type === 'execute_result') {
             const $outPrompt = tag('div', {
               className: 'output-prompt',
@@ -554,7 +593,7 @@ class JupyterNotebook {
             });
             $outputContainer.appendChild($outPrompt);
           }
-          
+
           const $output = tag('div', {
             className: `output output-${output.output_type}`,
             innerHTML: this.renderOutput(output)
@@ -563,11 +602,13 @@ class JupyterNotebook {
           $newOutputs.appendChild($outputContainer);
         });
       }
-      
+
       this.setModified(true);
     } catch (error) {
       $newOutputs.innerHTML = `<div class="output output-error"><pre>${this.escapeHtml(error.message)}</pre></div>`;
     }
+    
+    this.saveNotebookState();
   }
 
   async executeCode(code) {
@@ -577,36 +618,30 @@ class JupyterNotebook {
     }
 
     try {
-      // Try different approaches for code execution
-      
-      // Method 1: Try using Executor in Alpine
       let result;
       try {
         result = await Executor.execute(`python3 -c ${JSON.stringify(pythonCode)} 2>&1`, true);
       } catch (e1) {
-        // Method 2: Try without Alpine flag
         try {
           result = await Executor.execute(`python3 -c ${JSON.stringify(pythonCode)} 2>&1`, false);
         } catch (e2) {
-          // Method 3: Try using echo and pipe
           const escapedCode = pythonCode.replace(/'/g, "'\"'\"'");
           result = await Executor.execute(`echo '${escapedCode}' | python3 2>&1`, true);
         }
       }
-      
-      // Check for Python not found error
+
       if (result.includes('command not found') || result.includes('not found') || result.includes('No such file')) {
         return {
           outputs: [{
             output_type: 'error',
             ename: 'Error',
-            evalue: 'Python not installed. Install it in terminal: apk add python3',
-            traceback: ['Python not installed', 'Run in terminal: apk add python3']
+            evalue: 'Python not installed. Run: apk add python3',
+            traceback: ['Python not installed', 'Install in terminal: apk add python3']
           }],
           execution_count: null
         };
       }
-      
+
       return {
         outputs: [{
           output_type: 'stream',
@@ -620,7 +655,7 @@ class JupyterNotebook {
         outputs: [{
           output_type: 'error',
           ename: 'Error',
-          evalue: error.message || 'Failed to execute code',
+          evalue: error.message || 'Failed to execute',
           traceback: [error.message || 'Unknown error']
         }],
         execution_count: null
@@ -632,131 +667,68 @@ class JupyterNotebook {
     this.notebookData = {
       cells: [],
       metadata: {
-        kernelspec: {
-          display_name: 'Python 3',
-          language: 'python',
-          name: 'python3'
-        },
-        language_info: {
-          name: 'python',
-          version: '3.9.0'
-        }
+        kernelspec: { display_name: 'Python 3', language: 'python', name: 'python3' },
+        language_info: { name: 'python', version: '3.9.0' }
       },
       nbformat: 4,
       nbformat_minor: 5
     };
   }
 
+  saveNotebookState() {
+    if (this.editorFile && this.notebooks.has(this.editorFile.id)) {
+      const state = this.notebooks.get(this.editorFile.id);
+      state.data = this.notebookData;
+      state.selectedIndex = this.selectedCellIndex;
+      state.modified = this.isModified;
+    }
+  }
+
   setModified(value) {
     this.isModified = value;
-    if (this.notebookPage && this.notebookPage.header) {
-      const title = this.notebookPage.header.querySelector('.title');
-      if (title) {
-        title.textContent = value ? `● ${this.currentFileName}` : this.currentFileName;
-      }
+    if (this.editorFile) {
+      this.editorFile.isUnsaved = value;
     }
+    this.saveNotebookState();
   }
 
   async saveNotebook() {
     if (!this.currentFile) {
-      acode.alert('Info', 'Cannot save: no file path available');
+      acode.alert('Info', 'Cannot save: no file path');
       return;
     }
-    
+
     try {
       await acode.fsOperation(this.currentFile).writeFile(JSON.stringify(this.notebookData, null, 2));
-      
       this.setModified(false);
-      acode.pushNotification('Saved', 'Notebook saved successfully!', { type: 'success' });
+      acode.pushNotification('Saved', 'Notebook saved!', { type: 'success' });
     } catch (error) {
       acode.alert('Error', `Failed to save: ${error.message}`);
     }
   }
 
-  closeViewer() {
-    if (this.isModified) {
-      acode.confirm('Save changes?', 'Do you want to save your changes before closing?').then((save) => {
-        if (save) {
-          this.saveNotebook().then(() => this._doClose());
-        } else {
-          this._doClose();
-        }
-      });
-    } else {
-      this._doClose();
-    }
-  }
-
-  _doClose() {
-    const actionStack = acode.require('actionStack');
-    
-    try {
-      actionStack.remove('jupyter-notebook-viewer');
-    } catch (e) {}
-    
-    if (this.notebookPage) {
-      try {
-        this.notebookPage.remove();
-      } catch (e) {
-        try {
-          this.notebookPage.hide();
-        } catch (e2) {}
-      }
-      this.notebookPage = null;
-    }
-    
-    this.notebookData = null;
-    this.currentFile = null;
-    this.selectedCellIndex = -1;
-    this.isModified = false;
-  }
-
-  showMenu() {
-    const options = [
-      'Save notebook',
-      'Add code cell',
-      'Add markdown cell',
-      'Toggle cell type',
-      'Delete cell',
-      'Move cell up',
-      'Move cell down',
-      'Close notebook'
-    ];
-
-    acode.prompt('Notebook Menu', '', 'select', options).then(action => {
-      switch (action) {
-        case 'Save notebook': this.saveNotebook(); break;
-        case 'Add code cell': this.addCell(CELL_TYPES.CODE); break;
-        case 'Add markdown cell': this.addCell(CELL_TYPES.MARKDOWN); break;
-        case 'Toggle cell type': this.toggleCellType(); break;
-        case 'Delete cell': this.deleteCell(); break;
-        case 'Move cell up': this.moveCell(this.selectedCellIndex, -1); break;
-        case 'Move cell down': this.moveCell(this.selectedCellIndex, 1); break;
-        case 'Close notebook': this.closeViewer(); break;
-      }
-    });
-  }
-
   destroy() {
     const { commands } = editorManager.editor;
     commands.removeCommand('open-notebook-viewer');
-    
     acode.unregisterFileHandler(plugin.id);
     
-    this._doClose();
+    this.notebooks.forEach((state, fileId) => {
+      if (state.container && state.container.parentElement) {
+        state.container.remove();
+      }
+    });
+    this.notebooks.clear();
   }
 }
 
 if (window.acode) {
   const jupyterPlugin = new JupyterNotebook();
-  
+
   acode.setPluginInit(plugin.id, (baseUrl, $page, { cacheFileUrl, cacheFile }) => {
-    if (!baseUrl.endsWith('/')) {
-      baseUrl += '/';
-    }
+    if (!baseUrl.endsWith('/')) baseUrl += '/';
     jupyterPlugin.init(baseUrl);
   });
-  
+
   acode.setPluginUnmount(plugin.id, () => {
     jupyterPlugin.destroy();
   });
