@@ -18,96 +18,64 @@ class JupyterNotebook {
   $cells = null;
   selectedCellIndex = -1;
   isModified = false;
+  notebookPage = null;
 
-  async init($page, cacheFile, cacheFileUrl) {
+  async init(baseUrl, $page, { cacheFileUrl, cacheFile }) {
+    this.baseUrl = baseUrl;
     this.$page = $page;
-    this.cacheFile = cacheFile;
-    this.cacheFileUrl = cacheFileUrl;
     
     this.registerCommands();
-    this.setupFileHandler();
+    this.registerFileHandler();
   }
 
   registerCommands() {
-    const { commands } = editorManager.editor;
+    const commands = acode.require('commands');
 
     commands.addCommand({
       name: 'open-notebook-viewer',
       description: 'Open Jupyter Notebook viewer',
-      exec: () => this.openNotebookViewer()
-    });
-
-    commands.addCommand({
-      name: 'add-code-cell',
-      description: 'Add code cell',
-      exec: () => this.addCell(CELL_TYPES.CODE)
-    });
-
-    commands.addCommand({
-      name: 'add-markdown-cell',
-      description: 'Add markdown cell',
-      exec: () => this.addCell(CELL_TYPES.MARKDOWN)
-    });
-
-    commands.addCommand({
-      name: 'delete-cell',
-      description: 'Delete current cell',
-      exec: () => this.deleteCell()
-    });
-
-    commands.addCommand({
-      name: 'move-cell-up',
-      description: 'Move cell up',
-      exec: () => this.moveCell(-1)
-    });
-
-    commands.addCommand({
-      name: 'move-cell-down',
-      description: 'Move cell down',
-      exec: () => this.moveCell(1)
-    });
-
-    commands.addCommand({
-      name: 'save-notebook',
-      description: 'Save notebook',
-      exec: () => this.saveNotebook()
-    });
-
-    commands.addCommand({
-      name: 'run-cell',
-      description: 'Run current cell',
-      exec: () => this.runCell()
-    });
-
-    commands.addCommand({
-      name: 'toggle-cell-type',
-      description: 'Toggle cell type (code/markdown)',
-      exec: () => this.toggleCellType()
+      exec: () => this.openNotebookPicker()
     });
   }
 
-  setupFileHandler() {
-    const originalOpenFile = editorManager.openFile;
-    const self = this;
-    
-    editorManager.openFile = async function(filename, options) {
-      if (filename.endsWith('.ipynb')) {
-        return self.openNotebookFile(filename, options);
+  registerFileHandler() {
+    acode.registerFileHandler(plugin.id, {
+      extensions: ['ipynb'],
+      handleFile: async (fileInfo) => {
+        await this.openNotebookFile(fileInfo.uri, fileInfo.name);
       }
-      return originalOpenFile.call(this, filename, options);
-    };
+    });
   }
 
-  async openNotebookFile(filename, options) {
+  async openNotebookPicker() {
+    try {
+      const fs = acode.require('fs');
+      const fileBrowser = acode.require('fileBrowser');
+      
+      const file = await fileBrowser('open', {
+        type: 'file'
+      });
+      
+      if (file && file.url) {
+        await this.openNotebookFile(file.url, file.name);
+      }
+    } catch (error) {
+      acode.alert('Error', `Failed to open file browser: ${error.message}`);
+    }
+  }
+
+  async openNotebookFile(uri, filename) {
     try {
       const loader = acode.loader('Loading notebook...', 'Please wait');
       loader.show();
 
       const fs = acode.require('fs');
-      const content = await fs.readFile(filename);
+      const fileFs = await fs(uri);
+      const content = await fileFs.readFile('utf-8');
       
       this.notebookData = JSON.parse(content);
-      this.currentFile = filename;
+      this.currentFile = uri;
+      this.currentFileName = filename || 'notebook.ipynb';
       
       loader.hide();
       
@@ -117,29 +85,47 @@ class JupyterNotebook {
     }
   }
 
-  async openNotebookViewer() {
-    const fs = acode.require('fs');
-    const files = await fs.pickFile(['.ipynb']);
-    
-    if (files && files.length > 0) {
-      await this.openNotebookFile(files[0], {});
-    }
-  }
-
   renderNotebookViewer() {
-    if (!this.$page) {
-      this.$page = this.createPage();
-    }
-    
-    this.$page.innerHTML = '';
-    
-    this.$header = this.createHeader();
+    const page = acode.require('page');
+    const actionStack = acode.require('actionStack');
+    const tag = acode.require('tag');
+
+    const backBtn = tag('span', {
+      className: 'icon arrowleft',
+      onclick: () => this.closeViewer()
+    });
+
+    const saveBtn = tag('span', {
+      className: 'icon save',
+      onclick: () => this.saveNotebook()
+    });
+
+    const menuBtn = tag('span', {
+      className: 'icon more_vert',
+      onclick: () => this.showMenu()
+    });
+
+    this.notebookPage = page(this.currentFileName, {
+      lead: backBtn,
+      tail: [saveBtn, menuBtn]
+    });
+
     this.$container = document.createElement('div');
     this.$container.className = 'notebook-container';
     
     const styleEl = document.createElement('style');
     styleEl.textContent = notebookStyles;
     this.$container.appendChild(styleEl);
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'notebook-toolbar';
+    toolbar.innerHTML = `
+      <button class="toolbar-btn add-code-btn">+ Code</button>
+      <button class="toolbar-btn add-md-btn">+ Markdown</button>
+    `;
+    toolbar.querySelector('.add-code-btn').onclick = () => this.addCell(CELL_TYPES.CODE);
+    toolbar.querySelector('.add-md-btn').onclick = () => this.addCell(CELL_TYPES.MARKDOWN);
+    this.$container.appendChild(toolbar);
     
     this.$cells = document.createElement('div');
     this.$cells.className = 'cells-container';
@@ -147,66 +133,21 @@ class JupyterNotebook {
     this.renderCells();
     
     this.$container.appendChild(this.$cells);
-    this.$page.appendChild(this.$header);
-    this.$page.appendChild(this.$container);
-    
-    this.$page.show();
-  }
+    this.notebookPage.appendBody(this.$container);
 
-  createPage() {
-    const page = document.createElement('div');
-    page.className = 'page jupyter-notebook-page';
-    page.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: #1e1e1e;
-      z-index: 100;
-      display: flex;
-      flex-direction: column;
-    `;
-    document.body.appendChild(page);
-    return page;
-  }
+    this.notebookPage.show = () => {
+      actionStack.push({
+        id: 'jupyter-notebook-viewer',
+        action: () => this.closeViewer()
+      });
+      app.append(this.notebookPage);
+    };
 
-  createHeader() {
-    const header = document.createElement('header');
-    header.className = 'notebook-header';
-    header.innerHTML = `
-      <div class="header-left">
-        <button class="btn-back" title="Close">
-          <span class="icon icon-arrow-left"></span>
-        </button>
-        <span class="filename">${this.getFileName()}</span>
-        <span class="modified-indicator" style="display: none;">●</span>
-      </div>
-      <div class="header-right">
-        <button class="btn-add-code" title="Add Code Cell">+ Code</button>
-        <button class="btn-add-md" title="Add Markdown Cell">+ Markdown</button>
-        <button class="btn-save" title="Save">
-          <span class="icon icon-save"></span>
-        </button>
-        <button class="btn-menu" title="Menu">
-          <span class="icon icon-more-vert"></span>
-        </button>
-      </div>
-    `;
-
-    header.querySelector('.btn-back').onclick = () => this.closeViewer();
-    header.querySelector('.btn-add-code').onclick = () => this.addCell(CELL_TYPES.CODE);
-    header.querySelector('.btn-add-md').onclick = () => this.addCell(CELL_TYPES.MARKDOWN);
-    header.querySelector('.btn-save').onclick = () => this.saveNotebook();
-    header.querySelector('.btn-menu').onclick = () => this.showMenu();
-
-    return header;
+    this.notebookPage.show();
   }
 
   getFileName() {
-    if (!this.currentFile) return 'Untitled.ipynb';
-    const parts = this.currentFile.split('/');
-    return parts[parts.length - 1];
+    return this.currentFileName || 'Untitled.ipynb';
   }
 
   renderCells() {
@@ -253,7 +194,11 @@ class JupyterNotebook {
     if (cell.cell_type === CELL_TYPES.MARKDOWN) {
       const $preview = document.createElement('div');
       $preview.className = 'markdown-preview';
-      $preview.innerHTML = marked.parse(this.getSourceText(cell.source));
+      try {
+        $preview.innerHTML = marked.parse(this.getSourceText(cell.source));
+      } catch (e) {
+        $preview.textContent = this.getSourceText(cell.source);
+      }
       
       const $editor = document.createElement('textarea');
       $editor.className = 'cell-editor';
@@ -341,7 +286,11 @@ class JupyterNotebook {
   finishEditMarkdownCell(cell, $preview, $editor) {
     $editor.style.display = 'none';
     $preview.style.display = 'block';
-    $preview.innerHTML = marked.parse($editor.value);
+    try {
+      $preview.innerHTML = marked.parse($editor.value);
+    } catch (e) {
+      $preview.textContent = $editor.value;
+    }
     this.updateCellSource(cell, $editor.value);
   }
 
@@ -367,6 +316,7 @@ class JupyterNotebook {
   }
 
   escapeHtml(text) {
+    if (Array.isArray(text)) text = text.join('');
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
@@ -493,10 +443,14 @@ class JupyterNotebook {
     try {
       const tempFile = `/tmp/jupyter_cell_${Date.now()}.py`;
       const fs = acode.require('fs');
-      await fs.writeFile(tempFile, pythonCode);
+      const tempFs = await fs(tempFile);
+      await tempFs.writeFile(pythonCode);
       
       const result = await Executor.execute(`python3 ${tempFile} 2>&1`);
-      await fs.deleteFile(tempFile);
+      
+      try {
+        await tempFs.delete();
+      } catch (e) {}
       
       return {
         outputs: [{
@@ -540,28 +494,30 @@ class JupyterNotebook {
 
   setModified(value) {
     this.isModified = value;
-    const indicator = this.$header?.querySelector('.modified-indicator');
-    if (indicator) {
-      indicator.style.display = value ? 'inline' : 'none';
+    if (this.notebookPage && this.notebookPage.header) {
+      const title = this.notebookPage.header.querySelector('.title');
+      if (title) {
+        title.textContent = value ? `● ${this.getFileName()}` : this.getFileName();
+      }
     }
   }
 
   async saveNotebook() {
     if (!this.currentFile) {
-      const fs = acode.require('fs');
-      const result = await fs.saveFile('notebook.ipynb', JSON.stringify(this.notebookData, null, 2));
-      if (result) {
-        this.currentFile = result;
-        const filenameEl = this.$header.querySelector('.filename');
-        if (filenameEl) filenameEl.textContent = this.getFileName();
-      }
-    } else {
-      const fs = acode.require('fs');
-      await fs.writeFile(this.currentFile, JSON.stringify(this.notebookData, null, 2));
+      acode.alert('Info', 'Cannot save: no file path available');
+      return;
     }
     
-    this.setModified(false);
-    acode.alert('Saved', 'Notebook saved successfully!');
+    try {
+      const fs = acode.require('fs');
+      const fileFs = await fs(this.currentFile);
+      await fileFs.writeFile(JSON.stringify(this.notebookData, null, 2));
+      
+      this.setModified(false);
+      acode.pushNotification('Saved', 'Notebook saved successfully!', { type: 'success' });
+    } catch (error) {
+      acode.alert('Error', `Failed to save: ${error.message}`);
+    }
   }
 
   async closeViewer() {
@@ -572,10 +528,8 @@ class JupyterNotebook {
       }
     }
     
-    if (this.$page) {
-      this.$page.hide();
-      this.$page.remove();
-      this.$page = null;
+    if (this.notebookPage) {
+      this.notebookPage.hide();
     }
     
     this.notebookData = null;
@@ -611,19 +565,13 @@ class JupyterNotebook {
   }
 
   destroy() {
-    const { commands } = editorManager.editor;
+    const commands = acode.require('commands');
     commands.removeCommand('open-notebook-viewer');
-    commands.removeCommand('add-code-cell');
-    commands.removeCommand('add-markdown-cell');
-    commands.removeCommand('delete-cell');
-    commands.removeCommand('move-cell-up');
-    commands.removeCommand('move-cell-down');
-    commands.removeCommand('save-notebook');
-    commands.removeCommand('run-cell');
-    commands.removeCommand('toggle-cell-type');
     
-    if (this.$page) {
-      this.$page.remove();
+    acode.unregisterFileHandler(plugin.id);
+    
+    if (this.notebookPage) {
+      this.notebookPage.hide();
     }
   }
 }
@@ -635,8 +583,7 @@ if (window.acode) {
     if (!baseUrl.endsWith('/')) {
       baseUrl += '/';
     }
-    jupyterPlugin.baseUrl = baseUrl;
-    await jupyterPlugin.init($page, cacheFile, cacheFileUrl);
+    await jupyterPlugin.init(baseUrl, $page, { cacheFileUrl, cacheFile });
   });
   
   acode.setPluginUnmount(plugin.id, () => {
