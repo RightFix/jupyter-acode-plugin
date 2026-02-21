@@ -1,5 +1,6 @@
 import plugin from '../plugin.json';
 import { marked } from 'marked';
+import tag from 'html-tag-js';
 import notebookStyles from './styles.css';
 
 const CELL_TYPES = {
@@ -19,7 +20,7 @@ class JupyterNotebook {
   isModified = false;
   notebookPage = null;
 
-  async init(baseUrl) {
+  init(baseUrl) {
     this.baseUrl = baseUrl;
     this.registerCommands();
     this.registerFileHandler();
@@ -39,6 +40,7 @@ class JupyterNotebook {
     acode.registerFileHandler(plugin.id, {
       extensions: ['ipynb'],
       handleFile: async (fileInfo) => {
+        console.log('Jupyter: File handler called', fileInfo);
         await this.openNotebookFile(fileInfo.uri, fileInfo.name);
       }
     });
@@ -56,11 +58,14 @@ class JupyterNotebook {
   }
 
   async openNotebookFile(uri, filename) {
+    console.log('Jupyter: Opening file', uri, filename);
+    
     try {
       const loader = acode.loader('Loading notebook...', 'Please wait');
       loader.show();
 
       const content = await acode.fsOperation(uri).readFile('utf-8');
+      console.log('Jupyter: File content loaded', content.substring(0, 200));
       
       this.notebookData = JSON.parse(content);
       this.currentFile = uri;
@@ -70,12 +75,14 @@ class JupyterNotebook {
       
       this.renderNotebookViewer();
     } catch (error) {
-      loader.hide();
+      console.error('Jupyter: Error', error);
       acode.alert('Error', `Failed to open notebook: ${error.message}`);
     }
   }
 
   renderNotebookViewer() {
+    console.log('Jupyter: Rendering viewer');
+    
     const actionStack = acode.require('actionStack');
 
     const backBtn = tag('span', {
@@ -98,25 +105,29 @@ class JupyterNotebook {
       tail: [saveBtn, menuBtn]
     });
 
-    this.$container = document.createElement('div');
-    this.$container.className = 'notebook-container';
+    this.$container = tag('div', {
+      className: 'notebook-container'
+    });
     
-    const styleEl = document.createElement('style');
-    styleEl.textContent = notebookStyles;
+    const styleEl = tag('style', {
+      textContent: notebookStyles
+    });
     this.$container.appendChild(styleEl);
 
-    const toolbar = document.createElement('div');
-    toolbar.className = 'notebook-toolbar';
-    toolbar.innerHTML = `
-      <button class="toolbar-btn add-code-btn">+ Code</button>
-      <button class="toolbar-btn add-md-btn">+ Markdown</button>
-    `;
+    const toolbar = tag('div', {
+      className: 'notebook-toolbar',
+      innerHTML: `
+        <button class="toolbar-btn add-code-btn">+ Code</button>
+        <button class="toolbar-btn add-md-btn">+ Markdown</button>
+      `
+    });
     toolbar.querySelector('.add-code-btn').onclick = () => this.addCell(CELL_TYPES.CODE);
     toolbar.querySelector('.add-md-btn').onclick = () => this.addCell(CELL_TYPES.MARKDOWN);
     this.$container.appendChild(toolbar);
     
-    this.$cells = document.createElement('div');
-    this.$cells.className = 'cells-container';
+    this.$cells = tag('div', {
+      className: 'cells-container'
+    });
     
     this.renderCells();
     
@@ -132,6 +143,7 @@ class JupyterNotebook {
     };
 
     this.notebookPage.show();
+    console.log('Jupyter: Viewer shown');
   }
 
   renderCells() {
@@ -149,46 +161,47 @@ class JupyterNotebook {
   }
 
   createCellElement(cell, index) {
-    const $cell = document.createElement('div');
-    $cell.className = `cell cell-${cell.cell_type}${index === this.selectedCellIndex ? ' selected' : ''}`;
-    $cell.dataset.index = index;
+    const $cell = tag('div', {
+      className: `cell cell-${cell.cell_type}${index === this.selectedCellIndex ? ' selected' : ''}`,
+      dataset: { index }
+    });
     
-    const $cellHeader = document.createElement('div');
-    $cellHeader.className = 'cell-header';
+    const $cellHeader = tag('div', { className: 'cell-header' });
     
-    const $cellType = document.createElement('span');
-    $cellType.className = 'cell-type';
-    $cellType.textContent = cell.cell_type.toUpperCase();
+    const $cellType = tag('span', {
+      className: 'cell-type',
+      textContent: cell.cell_type.toUpperCase()
+    });
     
-    const $cellActions = document.createElement('div');
-    $cellActions.className = 'cell-actions';
-    $cellActions.innerHTML = `
-      <button class="btn-run" title="Run">▶</button>
-      <button class="btn-up" title="Move Up">↑</button>
-      <button class="btn-down" title="Move Down">↓</button>
-      <button class="btn-delete" title="Delete">🗑</button>
-    `;
+    const $cellActions = tag('div', {
+      className: 'cell-actions',
+      innerHTML: `
+        <button class="btn-run" title="Run">▶</button>
+        <button class="btn-up" title="Move Up">↑</button>
+        <button class="btn-down" title="Move Down">↓</button>
+        <button class="btn-delete" title="Delete">🗑</button>
+      `
+    });
 
     $cellHeader.appendChild($cellType);
     $cellHeader.appendChild($cellActions);
     
-    const $cellContent = document.createElement('div');
-    $cellContent.className = 'cell-content';
+    const $cellContent = tag('div', { className: 'cell-content' });
     
     if (cell.cell_type === CELL_TYPES.MARKDOWN) {
-      const $preview = document.createElement('div');
-      $preview.className = 'markdown-preview';
+      const $preview = tag('div', { className: 'markdown-preview' });
       try {
         $preview.innerHTML = marked.parse(this.getSourceText(cell.source));
       } catch (e) {
         $preview.textContent = this.getSourceText(cell.source);
       }
       
-      const $editor = document.createElement('textarea');
-      $editor.className = 'cell-editor';
-      $editor.value = this.getSourceText(cell.source);
-      $editor.style.display = 'none';
-      $editor.spellcheck = false;
+      const $editor = tag('textarea', {
+        className: 'cell-editor',
+        value: this.getSourceText(cell.source),
+        style: { display: 'none' },
+        spellcheck: false
+      });
       
       $cellContent.appendChild($preview);
       $cellContent.appendChild($editor);
@@ -196,11 +209,12 @@ class JupyterNotebook {
       $preview.onclick = () => this.editMarkdownCell($cell, $preview, $editor);
       $editor.onblur = () => this.finishEditMarkdownCell(cell, $preview, $editor);
     } else {
-      const $editor = document.createElement('textarea');
-      $editor.className = 'cell-editor code-editor';
-      $editor.value = this.getSourceText(cell.source);
-      $editor.spellcheck = false;
-      $editor.placeholder = cell.cell_type === CELL_TYPES.CODE ? 'Enter code...' : 'Enter raw text...';
+      const $editor = tag('textarea', {
+        className: 'cell-editor code-editor',
+        value: this.getSourceText(cell.source),
+        spellcheck: false,
+        placeholder: cell.cell_type === CELL_TYPES.CODE ? 'Enter code...' : 'Enter raw text...'
+      });
       
       $cellContent.appendChild($editor);
       
@@ -209,13 +223,13 @@ class JupyterNotebook {
     }
 
     if (cell.cell_type === CELL_TYPES.CODE && cell.outputs && cell.outputs.length > 0) {
-      const $outputs = document.createElement('div');
-      $outputs.className = 'cell-outputs';
+      const $outputs = tag('div', { className: 'cell-outputs' });
       
       cell.outputs.forEach(output => {
-        const $output = document.createElement('div');
-        $output.className = `output output-${output.output_type}`;
-        $output.innerHTML = this.renderOutput(output);
+        const $output = tag('div', {
+          className: `output output-${output.output_type}`,
+          innerHTML: this.renderOutput(output)
+        });
         $outputs.appendChild($output);
       });
       
@@ -396,8 +410,7 @@ class JupyterNotebook {
     const $outputs = $cell.querySelector('.cell-outputs');
     if ($outputs) $outputs.remove();
 
-    const $newOutputs = document.createElement('div');
-    $newOutputs.className = 'cell-outputs';
+    const $newOutputs = tag('div', { className: 'cell-outputs' });
     $newOutputs.innerHTML = '<div class="output running">Running...</div>';
     $cell.querySelector('.cell-content').appendChild($newOutputs);
 
@@ -408,9 +421,10 @@ class JupyterNotebook {
       
       $newOutputs.innerHTML = '';
       cell.outputs.forEach(output => {
-        const $output = document.createElement('div');
-        $output.className = `output output-${output.output_type}`;
-        $output.innerHTML = this.renderOutput(output);
+        const $output = tag('div', {
+          className: `output output-${output.output_type}`,
+          innerHTML: this.renderOutput(output)
+        });
         $newOutputs.appendChild($output);
       });
     } catch (error) {
