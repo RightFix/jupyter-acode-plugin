@@ -1,15 +1,13 @@
 .notebook-container {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0;
-  background: #ffffff;
-  min-height: 100%;
-  position: absolute;
-  top: 0;
+  position: fixed;
+  top: 44px;
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 1;
+  overflow-y: auto;
+  padding: 0;
+  background: #ffffff;
+  z-index: 5;
 }
 
 .notebook-toolbar {

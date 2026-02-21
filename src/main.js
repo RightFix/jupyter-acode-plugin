@@ -180,28 +180,26 @@ class JupyterNotebook {
   }
 
   showNotebookInEditor() {
-    // Hide the editor
-    const editorContainer = document.getElementById('editor');
-    if (editorContainer) {
-      editorContainer.style.display = 'none';
+    const $editors = document.getElementById('editors');
+    const $header = document.querySelector('header.header') || document.querySelector('.header');
+    
+    // Position notebook below header
+    if ($header) {
+      const headerHeight = $header.offsetHeight || 44;
+      this.$container.style.top = headerHeight + 'px';
     }
 
-    // Show notebook container in the main content area
-    const mainContent = document.querySelector('.main') || document.querySelector('#root') || document.body;
-    
-    // Find the right container
-    let container = this.$container;
-    
-    if (!container.parentElement) {
-      // Insert after the editor
-      if (editorContainer && editorContainer.parentElement) {
-        editorContainer.parentElement.insertBefore(container, editorContainer.nextSibling);
-      } else {
-        mainContent.appendChild(container);
-      }
-    } else {
-      container.style.display = 'block';
+    // Hide the editor content but keep structure
+    if ($editors) {
+      $editors.style.display = 'none';
     }
+
+    // Show notebook
+    if (!this.$container.parentElement) {
+      const main = document.querySelector('main') || document.querySelector('.main') || document.body;
+      main.appendChild(this.$container);
+    }
+    this.$container.style.display = 'block';
   }
 
   hideNotebookFromEditor() {
@@ -209,10 +207,9 @@ class JupyterNotebook {
       this.$container.style.display = 'none';
     }
     
-    // Show the editor
-    const editorContainer = document.getElementById('editor');
-    if (editorContainer) {
-      editorContainer.style.display = 'block';
+    const $editors = document.getElementById('editors');
+    if ($editors) {
+      $editors.style.display = '';
     }
   }
 
