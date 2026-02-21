@@ -19,9 +19,11 @@ class JupyterNotebook {
   selectedCellIndex = -1;
   isModified = false;
   notebookPage = null;
+  pageFn = null;
 
   init(baseUrl) {
     this.baseUrl = baseUrl;
+    this.pageFn = acode.require('page');
     this.registerCommands();
     this.registerFileHandler();
   }
@@ -100,7 +102,7 @@ class JupyterNotebook {
       onclick: () => this.showMenu()
     });
 
-    this.notebookPage = page(this.currentFileName, {
+    this.notebookPage = this.pageFn(this.currentFileName, {
       lead: backBtn,
       tail: [saveBtn, menuBtn]
     });
