@@ -108,7 +108,10 @@ class JupyterNotebook {
     });
 
     this.$container = tag('div', {
-      className: 'notebook-container'
+      className: 'notebook-container',
+      style: {
+        background: '#ffffff'
+      }
     });
     
     const styleEl = tag('style', {
@@ -168,13 +171,6 @@ class JupyterNotebook {
       dataset: { index }
     });
     
-    const $cellHeader = tag('div', { className: 'cell-header' });
-    
-    const $cellType = tag('span', {
-      className: 'cell-type',
-      textContent: cell.cell_type.toUpperCase()
-    });
-    
     const $cellActions = tag('div', {
       className: 'cell-actions',
       innerHTML: `
@@ -185,9 +181,6 @@ class JupyterNotebook {
       `
     });
 
-    $cellHeader.appendChild($cellType);
-    $cellHeader.appendChild($cellActions);
-    
     const $cellContent = tag('div', { className: 'cell-content' });
     
     if (cell.cell_type === CELL_TYPES.MARKDOWN) {
@@ -210,35 +203,70 @@ class JupyterNotebook {
       
       $preview.onclick = () => this.editMarkdownCell($cell, $preview, $editor);
       $editor.onblur = () => this.finishEditMarkdownCell(cell, $preview, $editor);
+      $editor.oninput = () => {
+        $editor.style.height = 'auto';
+        $editor.style.height = $editor.scrollHeight + 'px';
+      };
     } else {
+      const $promptArea = tag('div', { className: 'prompt-area' });
+      
+      const execNum = cell.execution_count || ' ';
+      const $prompt = tag('div', {
+        className: 'input-prompt',
+        innerHTML: `<span class="in-prompt">In [${execNum}]:</span>`
+      });
+      
       const $editor = tag('textarea', {
         className: 'cell-editor code-editor',
         value: this.getSourceText(cell.source),
         spellcheck: false,
-        placeholder: cell.cell_type === CELL_TYPES.CODE ? 'Enter code...' : 'Enter raw text...'
+        placeholder: 'Enter code...'
       });
       
-      $cellContent.appendChild($editor);
+      $promptArea.appendChild($prompt);
+      $promptArea.appendChild($editor);
+      $cellContent.appendChild($promptArea);
       
       $editor.onfocus = () => this.selectCell(index);
-      $editor.oninput = () => this.updateCellSource(cell, $editor.value);
+      $editor.oninput = () => {
+        this.updateCellSource(cell, $editor.value);
+        $editor.style.height = 'auto';
+        $editor.style.height = $editor.scrollHeight + 'px';
+      };
+      
+      // Auto-resize on load
+      setTimeout(() => {
+        $editor.style.height = 'auto';
+        $editor.style.height = $editor.scrollHeight + 'px';
+      }, 0);
     }
 
     if (cell.cell_type === CELL_TYPES.CODE && cell.outputs && cell.outputs.length > 0) {
       const $outputs = tag('div', { className: 'cell-outputs' });
       
-      cell.outputs.forEach(output => {
+      cell.outputs.forEach((output, i) => {
+        const $outputContainer = tag('div', { className: 'prompt-area' });
+        
+        if (output.output_type === 'execute_result') {
+          const $outPrompt = tag('div', {
+            className: 'output-prompt',
+            innerHTML: `<span class="out-prompt">Out[${cell.execution_count}]:</span>`
+          });
+          $outputContainer.appendChild($outPrompt);
+        }
+        
         const $output = tag('div', {
           className: `output output-${output.output_type}`,
           innerHTML: this.renderOutput(output)
         });
-        $outputs.appendChild($output);
+        $outputContainer.appendChild($output);
+        $outputs.appendChild($outputContainer);
       });
       
       $cellContent.appendChild($outputs);
     }
 
-    $cell.appendChild($cellHeader);
+    $cell.appendChild($cellActions);
     $cell.appendChild($cellContent);
 
     $cellActions.querySelector('.btn-run').onclick = (e) => {
@@ -409,26 +437,51 @@ class JupyterNotebook {
     const $editor = $cell.querySelector('.cell-editor');
     const code = $editor.value;
 
+    // Update prompt to show running
+    const $prompt = $cell.querySelector('.input-prompt');
+    if ($prompt) {
+      $prompt.innerHTML = '<span class="in-prompt">In [*]:</span>';
+    }
+
     const $outputs = $cell.querySelector('.cell-outputs');
     if ($outputs) $outputs.remove();
 
+    const $cellContent = $cell.querySelector('.cell-content');
     const $newOutputs = tag('div', { className: 'cell-outputs' });
     $newOutputs.innerHTML = '<div class="output running">Running...</div>';
-    $cell.querySelector('.cell-content').appendChild($newOutputs);
+    $cellContent.appendChild($newOutputs);
 
     try {
       const result = await this.executeCode(code);
       cell.outputs = result.outputs || [];
-      cell.execution_count = result.execution_count;
+      cell.execution_count = result.execution_count || Date.now();
+      
+      // Update prompt with execution count
+      if ($prompt) {
+        $prompt.innerHTML = `<span class="in-prompt">In [${cell.execution_count}]:</span>`;
+      }
       
       $newOutputs.innerHTML = '';
       cell.outputs.forEach(output => {
+        const $outputContainer = tag('div', { className: 'prompt-area' });
+        
+        if (output.output_type === 'execute_result') {
+          const $outPrompt = tag('div', {
+            className: 'output-prompt',
+            innerHTML: `<span class="out-prompt">Out[${cell.execution_count}]:</span>`
+          });
+          $outputContainer.appendChild($outPrompt);
+        }
+        
         const $output = tag('div', {
           className: `output output-${output.output_type}`,
           innerHTML: this.renderOutput(output)
         });
-        $newOutputs.appendChild($output);
+        $outputContainer.appendChild($output);
+        $newOutputs.appendChild($outputContainer);
       });
+      
+      this.setModified(true);
     } catch (error) {
       $newOutputs.innerHTML = `<div class="output output-error"><pre>${this.escapeHtml(error.message)}</pre></div>`;
     }
@@ -441,29 +494,11 @@ class JupyterNotebook {
     }
 
     try {
-      const fileName = `jupyter_cell_${Date.now()}.py`;
-      const tempFile = `${DATA_STORAGE}/${fileName}`;
+      // Encode code in base64 to avoid escaping issues
+      const encodedCode = btoa(unescape(encodeURIComponent(pythonCode)));
+      const command = `echo '${encodedCode}' | base64 -d | python3 2>&1`;
       
-      const dirExists = await acode.fsOperation(DATA_STORAGE).exists();
-      if (!dirExists) {
-        return {
-          outputs: [{
-            output_type: 'error',
-            ename: 'Error',
-            evalue: 'DATA_STORAGE directory not found',
-            traceback: ['DATA_STORAGE directory not found']
-          }],
-          execution_count: null
-        };
-      }
-      
-      await acode.fsOperation(DATA_STORAGE).createFile(fileName, pythonCode);
-      
-      const result = await Executor.execute(`python3 "${tempFile}" 2>&1`);
-      
-      try {
-        await acode.fsOperation(tempFile).delete();
-      } catch (e) {}
+      const result = await Executor.execute(command, true);
       
       return {
         outputs: [{
