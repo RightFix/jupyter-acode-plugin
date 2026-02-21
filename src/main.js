@@ -29,9 +29,11 @@ class JupyterNotebook {
   isModified = false;
   editorFile = null;
   notebooks = new Map();
+  EditorFile = null;
 
   init(baseUrl) {
     this.baseUrl = baseUrl;
+    this.EditorFile = acode.require('editorFile');
     this.registerCommands();
     this.registerFileHandler();
     this.setupEditorHook();
@@ -110,7 +112,7 @@ class JupyterNotebook {
       }
 
       // Create new editor file tab
-      const file = new EditorFile(filename, {
+      const file = new this.EditorFile(filename, {
         uri: uri,
         text: JSON.stringify(notebookData, null, 2),
         render: true,
