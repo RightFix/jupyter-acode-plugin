@@ -5,17 +5,11 @@ import notebookStyles from './styles.css';
 
 const CELL_TYPES = {
   CODE: 'code',
-  MARKDOWN: 'markdown',
-  RAW: 'raw'
+  MARKDOWN: 'markdown'
 };
 
 const PAIRS = {
-  '(': ')',
-  '[': ']',
-  '{': '}',
-  '"': '"',
-  "'": "'",
-  '`': '`'
+  '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '`': '`'
 };
 
 class JupyterNotebook {
@@ -27,22 +21,19 @@ class JupyterNotebook {
   $cells = null;
   selectedCellIndex = -1;
   isModified = false;
-  editorFile = null;
   notebooks = new Map();
 
   init(baseUrl) {
     this.baseUrl = baseUrl;
     this.registerCommands();
     this.registerFileHandler();
-    this.setupEditorHook();
   }
 
   registerCommands() {
     const { commands } = editorManager.editor;
-
     commands.addCommand({
       name: 'open-notebook-viewer',
-      description: 'Open Jupyter Notebook viewer',
+      description: 'Open Jupyter Notebook',
       exec: () => this.openNotebookPicker()
     });
   }
@@ -56,41 +47,6 @@ class JupyterNotebook {
     });
   }
 
-  setupEditorHook() {
-    editorManager.on('switch-file', this.onSwitchFile.bind(this));
-    
-    // Listen for file close events
-    document.addEventListener('close-file', (e) => {
-      const fileId = e.detail?.id || e.detail?.file?.id;
-      if (fileId && this.notebooks.has(fileId)) {
-        const state = this.notebooks.get(fileId);
-        if (state.container && state.container.parentElement) {
-          state.container.remove();
-        }
-        this.notebooks.delete(fileId);
-      }
-    });
-  }
-
-  onSwitchFile(file) {
-    // Check if switching to a notebook tab
-    const notebookData = this.notebooks.get(file.id);
-    if (notebookData) {
-      this.currentFile = notebookData.uri;
-      this.currentFileName = file.filename || file.name;
-      this.notebookData = notebookData.data;
-      this.$container = notebookData.container;
-      this.$cells = notebookData.cellsContainer;
-      this.selectedCellIndex = notebookData.selectedIndex;
-      this.isModified = notebookData.modified;
-      this.editorFile = file;
-      this.showNotebookInEditor();
-    } else {
-      // Switching to a regular file, hide notebook if visible
-      this.hideNotebookFromEditor();
-    }
-  }
-
   async openNotebookPicker() {
     try {
       const result = await acode.fileBrowser('file', 'Select notebook');
@@ -98,399 +54,276 @@ class JupyterNotebook {
         await this.openNotebookFile(result.url, result.filename || 'notebook.ipynb');
       }
     } catch (error) {
-      acode.alert('Error', `Failed to open file browser: ${error.message}`);
+      acode.alert('Error', error.message);
     }
   }
 
   async openNotebookFile(uri, filename) {
     try {
-      const loader = acode.loader('Loading notebook...', 'Please wait');
+      const loader = acode.loader('Loading...', 'Please wait');
       loader.show();
 
       const content = await acode.fsOperation(uri).readFile('utf-8');
       const notebookData = JSON.parse(content);
-      
       loader.hide();
 
-      // Check if already open
-      const existingFile = editorManager.getFile(uri, 'uri');
-      if (existingFile) {
-        editorManager.switchFile(existingFile.id);
-        return;
-      }
-
-      // Create new file using EditorFile
-      const EditorFile = acode.require('editorFile');
-      const fileId = `jupyter-${Date.now()}`;
-      
-      const file = new EditorFile(filename, {
-        uri: uri,
-        text: '', // We'll render our own view
-        isUnsaved: false,
-        id: fileId
-      });
-      
       this.currentFile = uri;
-      this.currentFileName = filename;
+      this.currentFileName = filename || 'notebook.ipynb';
       this.notebookData = notebookData;
-      this.editorFile = file;
       this.selectedCellIndex = -1;
       this.isModified = false;
 
-      // Create notebook container
-      this.createNotebookContainer();
-      
-      // Store notebook data
-      this.notebooks.set(fileId, {
-        uri: uri,
-        data: notebookData,
-        container: this.$container,
-        cellsContainer: this.$cells,
-        selectedIndex: this.selectedCellIndex,
-        modified: false,
-        fileId: fileId
-      });
-
-      // Show notebook in editor
-      this.showNotebookInEditor();
+      this.render();
 
     } catch (error) {
-      acode.alert('Error', `Failed to open notebook: ${error.message}`);
+      acode.alert('Error', `Failed to open: ${error.message}`);
     }
   }
 
-  createNotebookContainer() {
-    this.$container = tag('div', {
-      className: 'notebook-container',
-      style: { background: '#ffffff' }
+  render() {
+    // Remove existing container if any
+    const existing = document.querySelector('.jupyter-notebook-wrapper');
+    if (existing) existing.remove();
+
+    // Create wrapper
+    const wrapper = tag('div', {
+      className: 'jupyter-notebook-wrapper',
+      style: {
+        position: 'fixed',
+        top: '44px',
+        left: '0',
+        right: '0',
+        bottom: '0',
+        background: '#fff',
+        zIndex: '1',
+        overflow: 'auto'
+      }
     });
 
-    const styleEl = tag('style', { textContent: notebookStyles });
-    this.$container.appendChild(styleEl);
+    // Add styles
+    const style = tag('style', { textContent: notebookStyles });
+    wrapper.appendChild(style);
 
+    // Toolbar
     const toolbar = tag('div', {
-      className: 'notebook-toolbar',
+      className: 'nb-toolbar',
       innerHTML: `
-        <button class="toolbar-btn add-code-btn">+ Code</button>
-        <button class="toolbar-btn add-md-btn">+ Markdown</button>
-        <button class="toolbar-btn run-all-btn">Run All</button>
-        <button class="toolbar-btn save-btn">Save</button>
+        <button class="nb-btn add-code">+ Code</button>
+        <button class="nb-btn add-md">+ Markdown</button>
+        <button class="nb-btn run-all">Run All</button>
+        <button class="nb-btn save">Save</button>
       `
     });
-    
-    toolbar.querySelector('.add-code-btn').onclick = () => this.addCell(CELL_TYPES.CODE);
-    toolbar.querySelector('.add-md-btn').onclick = () => this.addCell(CELL_TYPES.MARKDOWN);
-    toolbar.querySelector('.run-all-btn').onclick = () => this.runAllCells();
-    toolbar.querySelector('.save-btn').onclick = () => this.saveNotebook();
-    
-    this.$container.appendChild(toolbar);
+    toolbar.querySelector('.add-code').onclick = () => this.addCell(CELL_TYPES.CODE);
+    toolbar.querySelector('.add-md').onclick = () => this.addCell(CELL_TYPES.MARKDOWN);
+    toolbar.querySelector('.run-all').onclick = () => this.runAllCells();
+    toolbar.querySelector('.save').onclick = () => this.saveNotebook();
+    wrapper.appendChild(toolbar);
 
-    this.$cells = tag('div', { className: 'cells-container' });
+    // Cells container
+    this.$cells = tag('div', { className: 'nb-cells' });
     this.renderCells();
-    this.$container.appendChild(this.$cells);
+    wrapper.appendChild(this.$cells);
+
+    // Add to page
+    const main = document.querySelector('main') || document.body;
+    main.appendChild(wrapper);
+    this.$container = wrapper;
+
+    // Hide editor
+    this.hideEditor();
   }
 
-  showNotebookInEditor() {
-    // Get the main content wrapper
-    const $main = document.querySelector('main') || document.querySelector('#main');
-    const $header = document.querySelector('header') || document.querySelector('.header');
-    const $sidebar = document.querySelector('#sidebar');
-    
-    // Calculate header height
-    let headerHeight = 44;
-    if ($header) {
-      headerHeight = $header.offsetHeight || 44;
-    }
-    
-    // Position notebook below header
-    this.$container.style.top = headerHeight + 'px';
-    
-    // Hide the editor container
-    const $editor = document.getElementById('editor');
-    const $editors = document.getElementById('editors');
-    
-    if ($editor) $editor.style.display = 'none';
-    if ($editors) $editors.style.display = 'none';
-
-    // Append notebook to main content area
-    if (!this.$container.parentElement) {
-      if ($main) {
-        $main.appendChild(this.$container);
-      } else {
-        document.body.appendChild(this.$container);
-      }
-    }
-    
-    this.$container.style.display = 'block';
+  hideEditor() {
+    const editorEl = document.getElementById('editor');
+    if (editorEl) editorEl.style.display = 'none';
+    const editorsEl = document.getElementById('editors');
+    if (editorsEl) editorsEl.style.display = 'none';
   }
 
-  hideNotebookFromEditor() {
-    if (this.$container) {
-      this.$container.style.display = 'none';
-    }
-    
-    // Show the editor
-    const $editor = document.getElementById('editor');
-    const $editors = document.getElementById('editors');
-    
-    if ($editor) $editor.style.display = '';
-    if ($editors) $editors.style.display = '';
+  showEditor() {
+    const editorEl = document.getElementById('editor');
+    if (editorEl) editorEl.style.display = '';
+    const editorsEl = document.getElementById('editors');
+    if (editorsEl) editorsEl.style.display = '';
   }
 
   renderCells() {
     this.$cells.innerHTML = '';
 
-    if (!this.notebookData || !this.notebookData.cells) {
-      this.$cells.innerHTML = '<div class="empty-notebook">No cells. Add a cell to start.</div>';
+    if (!this.notebookData?.cells?.length) {
+      this.$cells.innerHTML = '<div class="nb-empty">No cells. Add a cell to start.</div>';
       return;
     }
 
     this.notebookData.cells.forEach((cell, index) => {
-      const $cell = this.createCellElement(cell, index);
-      this.$cells.appendChild($cell);
-    });
-    
-    this.saveNotebookState();
-  }
-
-  setupIntellisense($editor) {
-    $editor.addEventListener('keydown', (e) => {
-      const start = $editor.selectionStart;
-      const end = $editor.selectionEnd;
-      const value = $editor.value;
-
-      if (PAIRS[e.key]) {
-        e.preventDefault();
-        const closing = PAIRS[e.key];
-        const selectedText = value.substring(start, end);
-        const newValue = value.substring(0, start) + e.key + selectedText + closing + value.substring(end);
-        $editor.value = newValue;
-        $editor.selectionStart = $editor.selectionEnd = start + 1;
-        $editor.dispatchEvent(new Event('input'));
-        return;
-      }
-
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        const lineStart = value.lastIndexOf('\n', start - 1) + 1;
-        const currentLine = value.substring(lineStart, start);
-        const indent = currentLine.match(/^\s*/)[0];
-        let extraIndent = '';
-        const trimmedLine = currentLine.trim();
-        if (trimmedLine.endsWith(':') && /^(def |class |if |elif |else|for |while |try|except|with )/.test(trimmedLine)) {
-          extraIndent = '    ';
-        }
-        const newValue = value.substring(0, start) + '\n' + indent + extraIndent + value.substring(end);
-        $editor.value = newValue;
-        $editor.selectionStart = $editor.selectionEnd = start + 1 + indent.length + extraIndent.length;
-        $editor.dispatchEvent(new Event('input'));
-        return;
-      }
-
-      if (e.key === 'Backspace') {
-        const before = value.substring(start - 1, start);
-        const after = value.substring(start, start + 1);
-        if (PAIRS[before] === after) {
-          e.preventDefault();
-          $editor.value = value.substring(0, start - 1) + value.substring(start + 1);
-          $editor.selectionStart = $editor.selectionEnd = start - 1;
-          $editor.dispatchEvent(new Event('input'));
-        }
-      }
-
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        const newValue = value.substring(0, start) + '    ' + value.substring(end);
-        $editor.value = newValue;
-        $editor.selectionStart = $editor.selectionEnd = start + 4;
-        $editor.dispatchEvent(new Event('input'));
-      }
+      this.$cells.appendChild(this.createCellElement(cell, index));
     });
   }
 
   createCellElement(cell, index) {
-    const $cell = tag('div', {
-      className: `cell cell-${cell.cell_type}${index === this.selectedCellIndex ? ' selected' : ''}`,
+    const isSelected = index === this.selectedCellIndex;
+    const cellEl = tag('div', {
+      className: `nb-cell nb-${cell.cell_type}${isSelected ? ' selected' : ''}`,
       dataset: { index }
     });
 
-    const $cellActions = tag('div', {
-      className: 'cell-actions',
-      innerHTML: `
-        <button class="btn-run" title="Run (Shift+Enter)">▶</button>
-        <button class="btn-up" title="Move Up">↑</button>
-        <button class="btn-down" title="Move Down">↓</button>
-        <button class="btn-delete" title="Delete">🗑</button>
-      `
+    // Cell actions
+    const actions = tag('div', {
+      className: 'nb-cell-actions',
+      innerHTML: `<span class="nb-run">▶</span><span class="nb-delete">×</span>`
     });
+    actions.querySelector('.nb-run').onclick = (e) => { e.stopPropagation(); this.runCell(index); };
+    actions.querySelector('.nb-delete').onclick = (e) => { e.stopPropagation(); this.deleteCell(index); };
+    cellEl.appendChild(actions);
 
-    const $cellContent = tag('div', { className: 'cell-content' });
+    // Prompt
+    if (cell.cell_type === 'code') {
+      const execCount = cell.execution_count || ' ';
+      const prompt = tag('div', {
+        className: 'nb-prompt',
+        innerHTML: `In&nbsp;[${execCount}]:`
+      });
+      cellEl.appendChild(prompt);
+    }
 
-    if (cell.cell_type === CELL_TYPES.MARKDOWN) {
-      const $preview = tag('div', { className: 'markdown-preview' });
+    // Content
+    const content = tag('div', { className: 'nb-cell-content' });
+
+    if (cell.cell_type === 'markdown') {
+      const preview = tag('div', { className: 'nb-markdown-preview' });
       try {
-        $preview.innerHTML = marked.parse(this.getSourceText(cell.source));
+        preview.innerHTML = marked.parse(this.getSource(cell.source));
       } catch (e) {
-        $preview.textContent = this.getSourceText(cell.source);
+        preview.textContent = this.getSource(cell.source);
       }
 
-      const $editor = tag('textarea', {
-        className: 'cell-editor',
-        value: this.getSourceText(cell.source),
+      const editor = tag('textarea', {
+        className: 'nb-editor',
+        value: this.getSource(cell.source),
         style: { display: 'none' },
         spellcheck: false
       });
 
-      $cellContent.appendChild($preview);
-      $cellContent.appendChild($editor);
+      content.appendChild(preview);
+      content.appendChild(editor);
 
-      $preview.onclick = () => this.editMarkdownCell($cell, $preview, $editor);
-      $editor.onblur = () => this.finishEditMarkdownCell(cell, $preview, $editor);
-      $editor.oninput = () => {
-        this.updateCellSource(cell, $editor.value);
-        this.autoResize($editor);
+      preview.onclick = () => {
+        preview.style.display = 'none';
+        editor.style.display = 'block';
+        editor.focus();
       };
-      this.setupIntellisense($editor);
+      editor.onblur = () => {
+        editor.style.display = 'none';
+        preview.style.display = 'block';
+        try {
+          preview.innerHTML = marked.parse(editor.value);
+        } catch (e) {
+          preview.textContent = editor.value;
+        }
+        cell.source = editor.value.split('\n');
+        this.isModified = true;
+      };
+      this.setupEditor(editor);
     } else {
-      const $promptArea = tag('div', { className: 'prompt-area' });
-
-      const execNum = cell.execution_count || ' ';
-      const $prompt = tag('div', {
-        className: 'input-prompt',
-        innerHTML: `<span class="in-prompt">In [${execNum}]:</span>`
-      });
-
-      const $editor = tag('textarea', {
-        className: 'cell-editor code-editor',
-        value: this.getSourceText(cell.source),
+      const editor = tag('textarea', {
+        className: 'nb-editor nb-code-editor',
+        value: this.getSource(cell.source),
         spellcheck: false
       });
-
-      $promptArea.appendChild($prompt);
-      $promptArea.appendChild($editor);
-      $cellContent.appendChild($promptArea);
-
-      $editor.onfocus = () => this.selectCell(index);
-      $editor.oninput = () => {
-        this.updateCellSource(cell, $editor.value);
-        this.autoResize($editor);
+      content.appendChild(editor);
+      editor.onfocus = () => this.selectCell(index);
+      editor.oninput = () => {
+        cell.source = editor.value.split('\n');
+        this.isModified = true;
       };
-
-      $editor.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && e.shiftKey) {
-          e.preventDefault();
-          this.runCell(index);
-        }
-      });
-
-      this.setupIntellisense($editor);
-      setTimeout(() => this.autoResize($editor), 0);
+      this.setupEditor(editor);
     }
 
-    if (cell.cell_type === CELL_TYPES.CODE && cell.outputs && cell.outputs.length > 0) {
-      const $outputs = tag('div', { className: 'cell-outputs' });
+    cellEl.appendChild(content);
 
+    // Outputs
+    if (cell.cell_type === 'code' && cell.outputs?.length) {
+      const outputsEl = tag('div', { className: 'nb-outputs' });
       cell.outputs.forEach(output => {
-        const $outputContainer = tag('div', { className: 'prompt-area' });
-
-        if (output.output_type === 'execute_result') {
-          const $outPrompt = tag('div', {
-            className: 'output-prompt',
-            innerHTML: `<span class="out-prompt">Out[${cell.execution_count}]:</span>`
-          });
-          $outputContainer.appendChild($outPrompt);
-        }
-
-        const $output = tag('div', {
-          className: `output output-${output.output_type}`,
+        outputsEl.appendChild(tag('div', {
+          className: 'nb-output',
           innerHTML: this.renderOutput(output)
-        });
-        $outputContainer.appendChild($output);
-        $outputs.appendChild($outputContainer);
+        }));
       });
-
-      $cellContent.appendChild($outputs);
+      cellEl.appendChild(outputsEl);
     }
 
-    $cell.appendChild($cellActions);
-    $cell.appendChild($cellContent);
+    cellEl.onclick = () => this.selectCell(index);
 
-    $cellActions.querySelector('.btn-run').onclick = (e) => {
-      e.stopPropagation();
-      this.runCell(index);
-    };
-    $cellActions.querySelector('.btn-up').onclick = (e) => {
-      e.stopPropagation();
-      this.moveCell(index, -1);
-    };
-    $cellActions.querySelector('.btn-down').onclick = (e) => {
-      e.stopPropagation();
-      this.moveCell(index, 1);
-    };
-    $cellActions.querySelector('.btn-delete').onclick = (e) => {
-      e.stopPropagation();
-      this.deleteCell(index);
-    };
-
-    $cell.onclick = () => this.selectCell(index);
-
-    return $cell;
+    return cellEl;
   }
 
-  autoResize($editor) {
-    $editor.style.height = 'auto';
-    $editor.style.height = $editor.scrollHeight + 'px';
+  setupEditor(editor) {
+    editor.addEventListener('keydown', (e) => {
+      const start = editor.selectionStart;
+      const end = editor.selectionEnd;
+      const val = editor.value;
+
+      // Auto-close
+      if (PAIRS[e.key]) {
+        e.preventDefault();
+        const closing = PAIRS[e.key];
+        const selected = val.substring(start, end);
+        editor.value = val.substring(0, start) + e.key + selected + closing + val.substring(end);
+        editor.selectionStart = editor.selectionEnd = start + 1;
+        return;
+      }
+
+      // Enter - auto indent
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+        const line = val.substring(lineStart, start);
+        const indent = line.match(/^\s*/)[0];
+        let extra = '';
+        if (line.trim().endsWith(':')) extra = '    ';
+        editor.value = val.substring(0, start) + '\n' + indent + extra + val.substring(end);
+        editor.selectionStart = editor.selectionEnd = start + 1 + indent.length + extra.length;
+        return;
+      }
+
+      // Backspace - delete pair
+      if (e.key === 'Backspace') {
+        const before = val.substring(start - 1, start);
+        const after = val.substring(start, start + 1);
+        if (PAIRS[before] === after) {
+          e.preventDefault();
+          editor.value = val.substring(0, start - 1) + val.substring(start + 1);
+          editor.selectionStart = editor.selectionEnd = start - 1;
+        }
+        return;
+      }
+
+      // Tab
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        editor.value = val.substring(0, start) + '    ' + val.substring(end);
+        editor.selectionStart = editor.selectionEnd = start + 4;
+      }
+    });
   }
 
-  getSourceText(source) {
+  getSource(source) {
     if (typeof source === 'string') return source;
     if (Array.isArray(source)) return source.join('');
     return '';
   }
 
-  updateCellSource(cell, text) {
-    cell.source = text.split('\n').map((line, i, arr) =>
-      i < arr.length - 1 ? line + '\n' : line
-    );
-    this.setModified(true);
-  }
-
-  editMarkdownCell($cell, $preview, $editor) {
-    $preview.style.display = 'none';
-    $editor.style.display = 'block';
-    $editor.focus();
-    this.autoResize($editor);
-    this.selectCell(parseInt($cell.dataset.index));
-  }
-
-  finishEditMarkdownCell(cell, $preview, $editor) {
-    $editor.style.display = 'none';
-    $preview.style.display = 'block';
-    try {
-      $preview.innerHTML = marked.parse($editor.value);
-    } catch (e) {
-      $preview.textContent = $editor.value;
-    }
-    this.updateCellSource(cell, $editor.value);
-  }
-
   renderOutput(output) {
     if (output.output_type === 'stream') {
-      return `<pre class="output-stream">${this.escapeHtml(output.text || '')}</pre>`;
-    }
-    if (output.output_type === 'execute_result' || output.output_type === 'display_data') {
-      if (output.data && output.data['text/html']) {
-        return output.data['text/html'];
-      }
-      if (output.data && output.data['image/png']) {
-        return `<img src="data:image/png;base64,${output.data['image/png']}" />`;
-      }
-      if (output.data && output.data['text/plain']) {
-        return `<pre class="output-result">${this.escapeHtml(output.data['text/plain'])}</pre>`;
-      }
+      return `<pre>${this.escapeHtml(output.text || '')}</pre>`;
     }
     if (output.output_type === 'error') {
-      return `<pre class="output-error">${this.escapeHtml(output.traceback ? output.traceback.join('\n') : output.evalue)}</pre>`;
+      return `<pre class="nb-error">${this.escapeHtml(output.traceback?.join('\n') || output.evalue)}</pre>`;
+    }
+    if (output.data?.['text/plain']) {
+      return `<pre>${this.escapeHtml(output.data['text/plain'])}</pre>`;
     }
     return '';
   }
@@ -504,175 +337,125 @@ class JupyterNotebook {
 
   selectCell(index) {
     this.selectedCellIndex = index;
-    const cells = this.$cells.querySelectorAll('.cell');
+    const cells = this.$cells.querySelectorAll('.nb-cell');
     cells.forEach((cell, i) => {
       cell.classList.toggle('selected', i === index);
     });
-    this.saveNotebookState();
   }
 
   addCell(type) {
     if (!this.notebookData) {
-      this.createNewNotebook();
+      this.notebookData = { cells: [], metadata: {}, nbformat: 4, nbformat_minor: 5 };
     }
 
     const newCell = {
       cell_type: type,
       source: [],
-      metadata: {},
-      execution_count: type === CELL_TYPES.CODE ? null : undefined,
-      outputs: type === CELL_TYPES.CODE ? [] : undefined
+      metadata: {}
     };
+    if (type === 'code') {
+      newCell.outputs = [];
+      newCell.execution_count = null;
+    }
 
     const insertIndex = this.selectedCellIndex >= 0 ? this.selectedCellIndex + 1 : this.notebookData.cells.length;
     this.notebookData.cells.splice(insertIndex, 0, newCell);
 
     this.renderCells();
     this.selectCell(insertIndex);
-    this.setModified(true);
+    this.isModified = true;
 
     setTimeout(() => {
-      const $newCell = this.$cells.querySelector(`[data-index="${insertIndex}"] .cell-editor`);
-      if ($newCell) $newCell.focus();
-    }, 100);
+      const editor = this.$cells.querySelector(`[data-index="${insertIndex}"] .nb-editor`);
+      if (editor) editor.focus();
+    }, 50);
   }
 
   deleteCell(index = this.selectedCellIndex) {
-    if (index < 0 || !this.notebookData || this.notebookData.cells.length <= 1) {
-      acode.alert('Cannot Delete', 'Notebook must have at least one cell.');
+    if (!this.notebookData || this.notebookData.cells.length <= 1) {
+      acode.alert('Cannot Delete', 'Need at least one cell');
       return;
     }
-
     this.notebookData.cells.splice(index, 1);
     this.renderCells();
     this.selectCell(Math.min(index, this.notebookData.cells.length - 1));
-    this.setModified(true);
+    this.isModified = true;
   }
 
-  moveCell(index, direction) {
-    const newIndex = index + direction;
-    if (newIndex < 0 || newIndex >= this.notebookData.cells.length) return;
-
-    const cells = this.notebookData.cells;
-    [cells[index], cells[newIndex]] = [cells[newIndex], cells[index]];
-
-    this.renderCells();
-    this.selectCell(newIndex);
-    this.setModified(true);
-  }
-
-  async runAllCells() {
-    const cells = this.notebookData.cells.filter(c => c.cell_type === CELL_TYPES.CODE);
-    for (let i = 0; i < cells.length; i++) {
-      const index = this.notebookData.cells.indexOf(cells[i]);
-      await this.runCell(index);
-    }
-  }
-
-  async runCell(index = this.selectedCellIndex) {
-    if (index < 0) return;
-
+  async runCell(index) {
     const cell = this.notebookData.cells[index];
-    if (cell.cell_type !== CELL_TYPES.CODE) return;
+    if (cell.cell_type !== 'code') return;
 
-    const $cell = this.$cells.querySelector(`[data-index="${index}"]`);
-    const $editor = $cell.querySelector('.cell-editor');
-    const code = $editor.value;
+    const cellEl = this.$cells.querySelector(`[data-index="${index}"]`);
+    const prompt = cellEl.querySelector('.nb-prompt');
+    if (prompt) prompt.innerHTML = 'In&nbsp;[*]:';
 
-    const $prompt = $cell.querySelector('.input-prompt');
-    if ($prompt) {
-      $prompt.innerHTML = '<span class="in-prompt">In [*]:</span>';
-    }
+    const outputsEl = cellEl.querySelector('.nb-outputs');
+    if (outputsEl) outputsEl.remove();
 
-    const $outputs = $cell.querySelector('.cell-outputs');
-    if ($outputs) $outputs.remove();
+    const content = cellEl.querySelector('.nb-cell-content');
+    const editor = content.querySelector('.nb-editor');
+    const code = editor.value.trim();
 
-    const $cellContent = $cell.querySelector('.cell-content');
-    const $newOutputs = tag('div', { className: 'cell-outputs' });
-    $newOutputs.innerHTML = '<div class="output running">Running...</div>';
-    $cellContent.appendChild($newOutputs);
+    if (!code) return;
+
+    const newOutputs = tag('div', { className: 'nb-outputs' });
+    newOutputs.innerHTML = '<div class="nb-output nb-running">Running...</div>';
+    cellEl.appendChild(newOutputs);
 
     try {
       const result = await this.executeCode(code);
       cell.outputs = result.outputs || [];
       cell.execution_count = result.execution_count || Date.now();
 
-      if ($prompt) {
-        $prompt.innerHTML = `<span class="in-prompt">In [${cell.execution_count}]:</span>`;
-      }
+      if (prompt) prompt.innerHTML = `In&nbsp;[${cell.execution_count}]:`;
 
-      $newOutputs.innerHTML = '';
+      newOutputs.innerHTML = '';
+      cell.outputs.forEach(output => {
+        newOutputs.appendChild(tag('div', {
+          className: 'nb-output',
+          innerHTML: this.renderOutput(output)
+        }));
+      });
 
-      if (cell.outputs.length === 0) {
-        $newOutputs.remove();
-      } else {
-        cell.outputs.forEach(output => {
-          const $outputContainer = tag('div', { className: 'prompt-area' });
-
-          if (output.output_type === 'execute_result') {
-            const $outPrompt = tag('div', {
-              className: 'output-prompt',
-              innerHTML: `<span class="out-prompt">Out[${cell.execution_count}]:</span>`
-            });
-            $outputContainer.appendChild($outPrompt);
-          }
-
-          const $output = tag('div', {
-            className: `output output-${output.output_type}`,
-            innerHTML: this.renderOutput(output)
-          });
-          $outputContainer.appendChild($output);
-          $newOutputs.appendChild($outputContainer);
-        });
-      }
-
-      this.setModified(true);
+      this.isModified = true;
     } catch (error) {
-      $newOutputs.innerHTML = `<div class="output output-error"><pre>${this.escapeHtml(error.message)}</pre></div>`;
+      newOutputs.innerHTML = `<div class="nb-output nb-error">${this.escapeHtml(error.message)}</div>`;
     }
-    
-    this.saveNotebookState();
+  }
+
+  async runAllCells() {
+    const codeCells = this.notebookData.cells
+      .map((c, i) => c.cell_type === 'code' ? i : -1)
+      .filter(i => i >= 0);
+
+    for (const index of codeCells) {
+      await this.runCell(index);
+    }
   }
 
   async executeCode(code) {
-    const pythonCode = code.trim();
-    if (!pythonCode) {
-      return { outputs: [], execution_count: null };
-    }
-
-    // Check if Executor is available
-    if (typeof Executor === 'undefined' || !Executor.execute) {
+    if (typeof Executor === 'undefined') {
       return {
         outputs: [{
           output_type: 'error',
-          ename: 'Error',
-          evalue: 'Terminal not available',
-          traceback: ['Executor not found', 'Make sure Acode terminal is set up']
+          evalue: 'Terminal not available. Install Acode Terminal plugin.',
+          traceback: ['Executor not found']
         }],
         execution_count: null
       };
     }
 
     try {
-      let result;
-      try {
-        result = await Executor.execute(`python3 -c ${JSON.stringify(pythonCode)} 2>&1`, true);
-      } catch (e1) {
-        try {
-          result = await Executor.execute(`python3 -c ${JSON.stringify(pythonCode)} 2>&1`, false);
-        } catch (e2) {
-          const escapedCode = pythonCode.replace(/'/g, "'\"'\"'");
-          result = await Executor.execute(`echo '${escapedCode}' | python3 2>&1`, true);
-        }
-      }
+      // Simple execution via terminal
+      const result = await Executor.execute(`python3 -c ${JSON.stringify(code)} 2>&1`, true);
 
-      if (result.includes('command not found') || result.includes('not found') || result.includes('No such file')) {
+      if (result.includes('not found') || result.includes('command not found')) {
         return {
           outputs: [{
             output_type: 'error',
-            ename: 'Error',
             evalue: 'Python not installed. Run: apk add python3',
-            traceback: ['Python not installed', 'Install in terminal: apk add python3']
+            traceback: ['Install Python in terminal: apk add python3']
           }],
           execution_count: null
         };
@@ -681,7 +464,6 @@ class JupyterNotebook {
       return {
         outputs: [{
           output_type: 'stream',
-          name: 'stdout',
           text: result
         }],
         execution_count: Date.now()
@@ -690,42 +472,12 @@ class JupyterNotebook {
       return {
         outputs: [{
           output_type: 'error',
-          ename: 'Error',
-          evalue: error.message || 'Failed to execute',
-          traceback: [error.message || 'Unknown error']
+          evalue: error.message,
+          traceback: [error.message]
         }],
         execution_count: null
       };
     }
-  }
-
-  createNewNotebook() {
-    this.notebookData = {
-      cells: [],
-      metadata: {
-        kernelspec: { display_name: 'Python 3', language: 'python', name: 'python3' },
-        language_info: { name: 'python', version: '3.9.0' }
-      },
-      nbformat: 4,
-      nbformat_minor: 5
-    };
-  }
-
-  saveNotebookState() {
-    if (this.editorFile && this.notebooks.has(this.editorFile.id)) {
-      const state = this.notebooks.get(this.editorFile.id);
-      state.data = this.notebookData;
-      state.selectedIndex = this.selectedCellIndex;
-      state.modified = this.isModified;
-    }
-  }
-
-  setModified(value) {
-    this.isModified = value;
-    if (this.editorFile) {
-      this.editorFile.isUnsaved = value;
-    }
-    this.saveNotebookState();
   }
 
   async saveNotebook() {
@@ -735,11 +487,11 @@ class JupyterNotebook {
     }
 
     try {
-      await acode.fsOperation(this.currentFile).writeFile(JSON.stringify(this.notebookData, null, 2));
-      this.setModified(false);
-      if (acode.toast) {
-        acode.toast('Notebook saved!', 2000);
-      }
+      await acode.fsOperation(this.currentFile).writeFile(
+        JSON.stringify(this.notebookData, null, 2)
+      );
+      this.isModified = false;
+      if (acode.toast) acode.toast('Saved!', 2000);
     } catch (error) {
       acode.alert('Error', `Failed to save: ${error.message}`);
     }
@@ -749,20 +501,18 @@ class JupyterNotebook {
     const { commands } = editorManager.editor;
     commands.removeCommand('open-notebook-viewer');
     acode.unregisterFileHandler(plugin.id);
-    
-    this.notebooks.forEach((state, fileId) => {
-      if (state.container && state.container.parentElement) {
-        state.container.remove();
-      }
-    });
-    this.notebooks.clear();
+
+    if (this.$container) {
+      this.$container.remove();
+    }
+    this.showEditor();
   }
 }
 
 if (window.acode) {
   const jupyterPlugin = new JupyterNotebook();
 
-  acode.setPluginInit(plugin.id, (baseUrl, $page, { cacheFileUrl, cacheFile }) => {
+  acode.setPluginInit(plugin.id, (baseUrl) => {
     if (!baseUrl.endsWith('/')) baseUrl += '/';
     jupyterPlugin.init(baseUrl);
   });
