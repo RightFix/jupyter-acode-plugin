@@ -84,11 +84,13 @@ class JupyterNotebook {
   }
 
   async openNotebookFile(uri, filename) {
+    let loader;
     try {
-      const loader = acode.loader('Loading...', 'Please wait');
+      loader = acode.loader('Loading...', 'Please wait');
       loader.show();
 
-      const content = await acode.fsOperation(uri).readFile('utf-8');
+      const fs = acode.fsOperation(uri);
+      const content = await fs.readFile('utf-8');
       const notebookData = JSON.parse(content);
       loader.hide();
 
@@ -101,6 +103,7 @@ class JupyterNotebook {
       this.render();
 
     } catch (error) {
+      if (loader) loader.hide();
       acode.alert('Error', `Failed to open: ${error.message}`);
     }
   }
@@ -413,17 +416,21 @@ class JupyterNotebook {
       acode.alert('Cannot Delete', 'Need at least one cell');
       return;
     }
+    if (index < 0) return;
+    
     this.notebookData.cells.splice(index, 1);
     this.renderCells();
-    this.selectCell(Math.min(index, this.notebookData.cells.length - 1));
+    this.selectCell(Math.min(index, (this.notebookData.cells.length || 1) - 1));
     this.isModified = true;
   }
 
   async runCell(index) {
     const cell = this.notebookData.cells[index];
-    if (cell.cell_type !== 'code') return;
+    if (!cell || cell.cell_type !== 'code') return;
 
     const cellEl = this.$cells.querySelector(`[data-index="${index}"]`);
+    if (!cellEl) return;
+
     const prompt = cellEl.querySelector('.nb-prompt');
     if (prompt) prompt.innerHTML = 'In&nbsp;[*]:';
 
@@ -462,6 +469,8 @@ class JupyterNotebook {
   }
 
   async runAllCells() {
+    if (!this.notebookData?.cells) return;
+    
     const codeCells = this.notebookData.cells
       .map((c, i) => c.cell_type === 'code' ? i : -1)
       .filter(i => i >= 0);
@@ -524,9 +533,8 @@ class JupyterNotebook {
     }
 
     try {
-      await acode.fsOperation(this.currentFile).writeFile(
-        JSON.stringify(this.notebookData, null, 2)
-      );
+      const fs = acode.fsOperation(this.currentFile);
+      await fs.writeFile(JSON.stringify(this.notebookData, null, 2));
       this.isModified = false;
       if (acode.toast) acode.toast('Saved!', 2000);
     } catch (error) {
