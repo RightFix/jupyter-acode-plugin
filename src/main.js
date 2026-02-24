@@ -22,20 +22,45 @@ class JupyterNotebook {
   selectedCellIndex = -1;
   isModified = false;
   notebooks = new Map();
+  editorCommands = null;
+  editorContainer = null;
 
   init(baseUrl) {
     this.baseUrl = baseUrl;
+    
+    // Get editor - works for both Ace and CodeMirror
+    const editor = this.getEditor();
+    if (editor) {
+      this.editorCommands = editor.commands || editor;
+      this.editorContainer = editorManager.container || document.querySelector('#editor');
+    }
+    
     this.registerCommands();
     this.registerFileHandler();
   }
 
+  getEditor() {
+    // Try Ace editor first (legacy)
+    if (editorManager.editor && editorManager.editor.commands) {
+      return editorManager.editor;
+    }
+    // Try CodeMirror (new version)
+    if (window.cmEditor) {
+      return window.cmEditor;
+    }
+    // Fallback
+    return editorManager.editor;
+  }
+
   registerCommands() {
-    const { commands } = editorManager.editor;
-    commands.addCommand({
-      name: 'open-notebook-viewer',
-      description: 'Open Jupyter Notebook',
-      exec: () => this.openNotebookPicker()
-    });
+    const commands = this.editorCommands || editorManager.editor?.commands;
+    if (commands) {
+      commands.addCommand({
+        name: 'open-notebook-viewer',
+        description: 'Open Jupyter Notebook',
+        exec: () => this.openNotebookPicker()
+      });
+    }
   }
 
   registerFileHandler() {
@@ -135,15 +160,27 @@ class JupyterNotebook {
   }
 
   hideEditor() {
-    const editorEl = document.getElementById('editor');
-    if (editorEl) editorEl.style.display = 'none';
+    // Hide Ace editor
+    const aceEditor = document.getElementById('editor');
+    if (aceEditor) aceEditor.style.display = 'none';
+    
+    // Hide CodeMirror editor
+    const cmEditor = document.querySelector('.cm-editor');
+    if (cmEditor) cmEditor.style.display = 'none';
+    
     const editorsEl = document.getElementById('editors');
     if (editorsEl) editorsEl.style.display = 'none';
   }
 
   showEditor() {
-    const editorEl = document.getElementById('editor');
-    if (editorEl) editorEl.style.display = '';
+    // Show Ace editor
+    const aceEditor = document.getElementById('editor');
+    if (aceEditor) aceEditor.style.display = '';
+    
+    // Show CodeMirror editor  
+    const cmEditor = document.querySelector('.cm-editor');
+    if (cmEditor) cmEditor.style.display = '';
+    
     const editorsEl = document.getElementById('editors');
     if (editorsEl) editorsEl.style.display = '';
   }
@@ -498,8 +535,10 @@ class JupyterNotebook {
   }
 
   destroy() {
-    const { commands } = editorManager.editor;
-    commands.removeCommand('open-notebook-viewer');
+    const commands = this.editorCommands || editorManager.editor?.commands;
+    if (commands) {
+      commands.removeCommand('open-notebook-viewer');
+    }
     acode.unregisterFileHandler(plugin.id);
 
     if (this.$container) {
